@@ -213,74 +213,114 @@ with st.sidebar:
 
 
 # ═══════════════════════════════════════════════════════════
-# CENTRED HEADER — App title + Navigation + Triage Legend
+# RIGHT-PANEL HEADER — App title left, Nav + Triage right
 # ═══════════════════════════════════════════════════════════
-st.markdown(
-    """
-<div style="text-align:center;padding:28px 0 8px 0;">
-    <span style="font-size:3rem;">🩺</span>
-    <h1 style="margin:8px 0 4px 0;font-size:2.2rem;font-weight:800;letter-spacing:-0.5px;">
-        AI Health Assistant
-    </h1>
-    <p style="color:#57606a;font-size:1rem;margin:0;">Powered by <strong>Gemini 3.6 Flash</strong></p>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+hdr_left, hdr_right = st.columns([1.1, 1], gap="large")
 
-# ── Navigation pill buttons (centred) ─────────────────────
-_, nav_c1, nav_c2, _ = st.columns([1.5, 2, 2, 1.5])
-with nav_c1:
-    if st.button(
-        "🩺  Symptom Checker",
-        use_container_width=True,
-        type="primary" if st.session_state.page == "Symptom Checker" else "secondary",
-    ):
-        st.session_state.page = "Symptom Checker"
-        st.rerun()
-with nav_c2:
-    if st.button(
-        "📖  Lifestyle Guide",
-        use_container_width=True,
-        type="primary" if st.session_state.page == "Lifestyle Guide" else "secondary",
-    ):
-        st.session_state.page = "Lifestyle Guide"
-        st.rerun()
-
-# ── Triage legend (centred cards) — shown only on Symptom Checker ──
-if st.session_state.page == "Symptom Checker":
-    st.markdown("<br>", unsafe_allow_html=True)
+with hdr_left:
     st.markdown(
         """
-<div style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin:4px 0 20px 0;">
-    <div style="
-        background:#d4edda;border:2px solid #c3e6cb;border-radius:14px;
-        padding:12px 22px;text-align:center;min-width:160px;
-    ">
-        <div style="font-size:1.6rem;">🟢</div>
-        <div style="font-weight:700;color:#1e7e34;font-size:0.95rem;margin:4px 0 2px 0;">SELF-CARE</div>
-        <div style="color:#1e7e34;font-size:0.78rem;">Manage at home</div>
-    </div>
-    <div style="
-        background:#fff3cd;border:2px solid #ffeeba;border-radius:14px;
-        padding:12px 22px;text-align:center;min-width:160px;
-    ">
-        <div style="font-size:1.6rem;">🟠</div>
-        <div style="font-weight:700;color:#856404;font-size:0.95rem;margin:4px 0 2px 0;">SEE A DOCTOR</div>
-        <div style="color:#856404;font-size:0.78rem;">Book an appointment</div>
-    </div>
-    <div style="
-        background:#f8d7da;border:2px solid #f5c6cb;border-radius:14px;
-        padding:12px 22px;text-align:center;min-width:160px;
-    ">
-        <div style="font-size:1.6rem;">🔴</div>
-        <div style="font-weight:700;color:#721c24;font-size:0.95rem;margin:4px 0 2px 0;">EMERGENCY</div>
-        <div style="color:#721c24;font-size:0.78rem;">Call 911 / 999 now</div>
-    </div>
+<div style="padding:24px 0 16px 0;">
+    <span style="font-size:3rem;">🩺</span>
+    <h1 style="margin:8px 0 4px 0;font-size:2rem;font-weight:800;letter-spacing:-0.5px;color:#1a3c4d;">
+        AI Health Assistant
+    </h1>
+    <p style="color:#4a7a8a;font-size:0.95rem;margin:0;">
+        Powered by <strong>Gemini 3.6 Flash</strong>
+    </p>
 </div>
 """,
         unsafe_allow_html=True,
     )
+
+with hdr_right:
+    # ── Navigation card ──────────────────────────────────
+    st.markdown(
+        """
+<div style="
+    background:rgba(255,255,255,0.72);
+    border:1.5px solid rgba(100,190,170,0.45);
+    border-radius:18px;
+    padding:18px 20px 14px 20px;
+    margin-top:18px;
+    box-shadow:0 2px 12px rgba(80,160,150,0.10);
+">
+    <div style="font-size:0.7rem;font-weight:700;letter-spacing:2px;color:#4a9b8e;margin-bottom:10px;">
+        ◈ NAVIGATE
+    </div>
+""",
+        unsafe_allow_html=True,
+    )
+    nav_b1, nav_b2 = st.columns(2)
+    with nav_b1:
+        if st.button(
+            "🩺 Symptom\nChecker",
+            use_container_width=True,
+            type="primary" if st.session_state.page == "Symptom Checker" else "secondary",
+            key="nav_symptom",
+        ):
+            st.session_state.page = "Symptom Checker"
+            st.rerun()
+    with nav_b2:
+        if st.button(
+            "📖 Lifestyle\nGuide",
+            use_container_width=True,
+            type="primary" if st.session_state.page == "Lifestyle Guide" else "secondary",
+            key="nav_lifestyle",
+        ):
+            st.session_state.page = "Lifestyle Guide"
+            st.rerun()
+
+    # ── Triage legend stacked vertically on the right ────
+    if st.session_state.page == "Symptom Checker":
+        st.markdown(
+            """
+<div style="margin-top:14px;">
+    <div style="font-size:0.7rem;font-weight:700;letter-spacing:2px;color:#4a9b8e;margin-bottom:10px;">
+        ◈ TRIAGE LEVELS
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="
+            background:#d4edda;border-left:5px solid #28a745;
+            border-radius:10px;padding:8px 14px;
+            display:flex;align-items:center;gap:10px;
+        ">
+            <span style="font-size:1.3rem;">🟢</span>
+            <div>
+                <div style="font-weight:700;color:#1e7e34;font-size:0.82rem;">SELF-CARE</div>
+                <div style="color:#1e7e34;font-size:0.72rem;">Manage at home</div>
+            </div>
+        </div>
+        <div style="
+            background:#fff3cd;border-left:5px solid #ffc107;
+            border-radius:10px;padding:8px 14px;
+            display:flex;align-items:center;gap:10px;
+        ">
+            <span style="font-size:1.3rem;">🟠</span>
+            <div>
+                <div style="font-weight:700;color:#856404;font-size:0.82rem;">SEE A DOCTOR</div>
+                <div style="color:#856404;font-size:0.72rem;">Book an appointment</div>
+            </div>
+        </div>
+        <div style="
+            background:#f8d7da;border-left:5px solid #dc3545;
+            border-radius:10px;padding:8px 14px;
+            display:flex;align-items:center;gap:10px;
+        ">
+            <span style="font-size:1.3rem;">🔴</span>
+            <div>
+                <div style="font-weight:700;color:#721c24;font-size:0.82rem;">EMERGENCY</div>
+                <div style="color:#721c24;font-size:0.72rem;">Call 911 / 999 now</div>
+            </div>
+        </div>
+    </div>
+</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("</div>", unsafe_allow_html=True)
 
 st.divider()
 
