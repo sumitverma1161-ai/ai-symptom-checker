@@ -29,6 +29,20 @@ Response JSON schema (strictly follow this):
   ],
   "recommended_actions": ["<action 1>", "<action 2>", "..."],
   "warning_signs": ["<sign to watch for 1>", "..."],
+  "recommended_doctors": [
+    {
+      "specialty": "<medical specialty, e.g. Dermatologist, Cardiologist, General Practitioner>",
+      "why": "<1 sentence explaining why this specialist is relevant to the symptoms>",
+      "example_doctors": [
+        {
+          "name": "<realistic full doctor name, e.g. Dr. Sarah Mitchell>",
+          "qualification": "<e.g. MBBS, MD, FRCP>",
+          "experience": "<e.g. 15 years in Dermatology>",
+          "known_for": "<1 sentence about their expertise or notable area>"
+        }
+      ]
+    }
+  ],
   "disclaimer": "This is for informational purposes only and does not constitute medical advice. Always consult a qualified healthcare professional for diagnosis and treatment."
 }
 

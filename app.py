@@ -215,7 +215,7 @@ def display_result(result: dict):
 
     # ── Tabs for detailed output ────────────────────────────────────
     tab1, tab2, tab3, tab4 = st.tabs(
-        ["💊 Conditions", "✅ Recommended Actions", "⚠️ Warning Signs", "📄 Raw JSON"]
+        ["💊 Conditions", "✅ Recommended Actions", "⚠️ Warning Signs", "🩺 Get Help"]
     )
 
     with tab1:
@@ -261,7 +261,42 @@ def display_result(result: dict):
             st.success("No immediate red-flag warning signs identified.")
 
     with tab4:
-        st.json(result)
+        st.markdown("### 🩺 Recommended Specialists & Doctors")
+        st.caption("Based on your symptoms, these are the types of doctors you should consider consulting.")
+        st.divider()
+
+        doctors_list = result.get("recommended_doctors", [])
+        if doctors_list:
+            for specialty_group in doctors_list:
+                specialty = specialty_group.get("specialty", "")
+                why = specialty_group.get("why", "")
+                example_doctors = specialty_group.get("example_doctors", [])
+
+                st.markdown(f"#### 👨‍⚕️ {specialty}")
+                st.info(f"**Why this specialist?** {why}")
+
+                for doc in example_doctors:
+                    st.markdown(
+                        f"""
+<div style="border:1px solid #dee2e6;border-radius:10px;padding:16px 20px;margin-bottom:12px;background:#f8f9fa;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+        <span style="font-size:2rem;">👤</span>
+        <div>
+            <strong style="font-size:1.05rem;color:#1f2328;">{doc.get('name','')}</strong><br>
+            <span style="font-size:0.85rem;color:#57606a;">{doc.get('qualification','')}</span>
+        </div>
+    </div>
+    <p style="margin:4px 0;font-size:0.9rem;">🏅 <strong>Experience:</strong> {doc.get('experience','')}</p>
+    <p style="margin:4px 0;font-size:0.9rem;">🔬 <strong>Known for:</strong> {doc.get('known_for','')}</p>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+                st.divider()
+        else:
+            st.info("No specific doctor recommendations available. Please consult your local healthcare provider.")
+
+        st.caption("⚠️ The doctors listed are AI-generated examples for guidance only. Please search for verified, licensed practitioners in your area.")
 
     # ── Disclaimer ──────────────────────────────────────────────────
     st.divider()
