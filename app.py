@@ -33,6 +33,68 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
+# Global gradient + UI polish
+# ─────────────────────────────────────────────
+st.markdown(
+    """
+<style>
+/* ── Main app background: soft light-blue → mint-green gradient ── */
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #e8f4fd 0%, #d6eef8 30%, #d4f1e8 65%, #c8edd9 100%);
+    min-height: 100vh;
+}
+
+/* ── Sidebar: frosted white tint ── */
+[data-testid="stSidebar"] {
+    background: rgba(255, 255, 255, 0.82) !important;
+    backdrop-filter: blur(8px);
+    border-right: 1px solid rgba(180, 220, 210, 0.5);
+}
+
+/* ── Top header bar ── */
+[data-testid="stHeader"] {
+    background: rgba(232, 244, 253, 0.75);
+    backdrop-filter: blur(6px);
+}
+
+/* ── Form / widget containers: glass card feel ── */
+[data-testid="stForm"] {
+    background: rgba(255, 255, 255, 0.75);
+    border-radius: 16px;
+    border: 1px solid rgba(180, 220, 210, 0.6);
+    padding: 8px;
+    backdrop-filter: blur(4px);
+}
+
+/* ── Expander header ── */
+[data-testid="stExpander"] {
+    background: rgba(255, 255, 255, 0.65);
+    border-radius: 10px;
+    border: 1px solid rgba(180, 220, 210, 0.5);
+}
+
+/* ── Tab list ── */
+[data-testid="stTabs"] [role="tablist"] {
+    background: rgba(255, 255, 255, 0.55);
+    border-radius: 10px;
+    padding: 4px;
+}
+
+/* ── Metric / info boxes ── */
+[data-testid="stAlert"] {
+    border-radius: 12px;
+}
+
+/* ── Dividers: subtle teal tint ── */
+hr {
+    border-color: rgba(100, 190, 170, 0.3) !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# ─────────────────────────────────────────────
 # Load env variables (for local development)
 # ─────────────────────────────────────────────
 load_dotenv()
