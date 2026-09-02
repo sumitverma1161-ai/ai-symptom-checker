@@ -138,33 +138,6 @@ with st.sidebar:
     )
 
     st.divider()
-    st.markdown("### 🗂️ Navigation")
-    if st.button("🩺 Symptom Checker", use_container_width=True,
-                 type="primary" if st.session_state.page == "Symptom Checker" else "secondary"):
-        st.session_state.page = "Symptom Checker"
-        st.rerun()
-    if st.button("📖 Lifestyle Guide", use_container_width=True,
-                 type="primary" if st.session_state.page == "Lifestyle Guide" else "secondary"):
-        st.session_state.page = "Lifestyle Guide"
-        st.rerun()
-
-    st.divider()
-
-    if st.session_state.page == "Symptom Checker":
-        st.markdown("### Triage Levels")
-        st.markdown("🟢 **SELF-CARE** — Manage at home")
-        st.markdown("🟠 **SEE A DOCTOR** — Book an appointment")
-        st.markdown("🔴 **EMERGENCY** — Call 911 / 999 immediately")
-    else:
-        st.markdown("### Guide Topics")
-        st.markdown("Try topics like:")
-        st.markdown("- Headache prevention")
-        st.markdown("- Managing anxiety")
-        st.markdown("- Better sleep hygiene")
-        st.markdown("- Reducing back pain")
-        st.markdown("- Heart health habits")
-
-    st.divider()
     st.caption(
         "⚠️ **Disclaimer:** This tool is for informational purposes only. "
         "It does not replace professional medical advice."
@@ -178,11 +151,82 @@ with st.sidebar:
 
 
 # ═══════════════════════════════════════════════════════════
+# CENTRED HEADER — App title + Navigation + Triage Legend
+# ═══════════════════════════════════════════════════════════
+st.markdown(
+    """
+<div style="text-align:center;padding:28px 0 8px 0;">
+    <span style="font-size:3rem;">🩺</span>
+    <h1 style="margin:8px 0 4px 0;font-size:2.2rem;font-weight:800;letter-spacing:-0.5px;">
+        AI Health Assistant
+    </h1>
+    <p style="color:#57606a;font-size:1rem;margin:0;">Powered by <strong>Gemini 3.6 Flash</strong></p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# ── Navigation pill buttons (centred) ─────────────────────
+_, nav_c1, nav_c2, _ = st.columns([1.5, 2, 2, 1.5])
+with nav_c1:
+    if st.button(
+        "🩺  Symptom Checker",
+        use_container_width=True,
+        type="primary" if st.session_state.page == "Symptom Checker" else "secondary",
+    ):
+        st.session_state.page = "Symptom Checker"
+        st.rerun()
+with nav_c2:
+    if st.button(
+        "📖  Lifestyle Guide",
+        use_container_width=True,
+        type="primary" if st.session_state.page == "Lifestyle Guide" else "secondary",
+    ):
+        st.session_state.page = "Lifestyle Guide"
+        st.rerun()
+
+# ── Triage legend (centred cards) — shown only on Symptom Checker ──
+if st.session_state.page == "Symptom Checker":
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(
+        """
+<div style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin:4px 0 20px 0;">
+    <div style="
+        background:#d4edda;border:2px solid #c3e6cb;border-radius:14px;
+        padding:12px 22px;text-align:center;min-width:160px;
+    ">
+        <div style="font-size:1.6rem;">🟢</div>
+        <div style="font-weight:700;color:#1e7e34;font-size:0.95rem;margin:4px 0 2px 0;">SELF-CARE</div>
+        <div style="color:#1e7e34;font-size:0.78rem;">Manage at home</div>
+    </div>
+    <div style="
+        background:#fff3cd;border:2px solid #ffeeba;border-radius:14px;
+        padding:12px 22px;text-align:center;min-width:160px;
+    ">
+        <div style="font-size:1.6rem;">🟠</div>
+        <div style="font-weight:700;color:#856404;font-size:0.95rem;margin:4px 0 2px 0;">SEE A DOCTOR</div>
+        <div style="color:#856404;font-size:0.78rem;">Book an appointment</div>
+    </div>
+    <div style="
+        background:#f8d7da;border:2px solid #f5c6cb;border-radius:14px;
+        padding:12px 22px;text-align:center;min-width:160px;
+    ">
+        <div style="font-size:1.6rem;">🔴</div>
+        <div style="font-weight:700;color:#721c24;font-size:0.95rem;margin:4px 0 2px 0;">EMERGENCY</div>
+        <div style="color:#721c24;font-size:0.78rem;">Call 911 / 999 now</div>
+    </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+st.divider()
+
+# ═══════════════════════════════════════════════════════════
 # PAGE 1 — SYMPTOM CHECKER
 # ═══════════════════════════════════════════════════════════
 if st.session_state.page == "Symptom Checker":
 
-    st.title("🩺 AI-Powered Symptom Checker")
     st.markdown(
         "> Enter your symptoms and receive an instant AI-powered triage recommendation — "
         "**Self-Care**, **See a Doctor**, or **Emergency** — along with possible conditions."
