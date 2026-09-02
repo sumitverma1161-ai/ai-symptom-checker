@@ -284,10 +284,10 @@ if st.session_state.page == "Symptom Checker":
                         f"""
 <div style="border:1px solid #dee2e6;border-radius:8px;padding:12px 16px;margin-bottom:10px;background:#fafafa;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-        <strong style="font-size:1rem;">{cond.get('name','')}</strong>
+        <strong style="font-size:1rem;color:#000000;">{cond.get('name','')}</strong>
         <span style="background:{badge_bg};color:#fff;border-radius:12px;padding:2px 10px;font-size:0.78rem;font-weight:600;">{likelihood}</span>
     </div>
-    <p style="margin:0;color:#555;font-size:0.9rem;">{cond.get('brief_description','')}</p>
+    <p style="margin:0;color:#000000;font-size:0.9rem;">{cond.get('brief_description','')}</p>
 </div>
 """,
                         unsafe_allow_html=True,
