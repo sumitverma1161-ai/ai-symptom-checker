@@ -27,6 +27,7 @@ from ai_providers import (
     PROVIDER_GROQ,
     GROQ_MODELS,
     GROQ_MODEL_LARGE,
+    GROQ_MODEL_SMALL,
     GEMINI_MODEL,
 )
 
@@ -201,8 +202,7 @@ with st.sidebar:
             format_func=lambda p: f"{'✨' if p == PROVIDER_GEMINI else '⚡'} {p}",
             help=(
                 f"**{PROVIDER_GEMINI}**: {GEMINI_MODEL} — full multimodal (text + images).\n\n"
-                f"**{PROVIDER_GROQ}**: text → {GROQ_MODEL_LARGE}/{GROQ_MODEL_SMALL} · "
-                f"vision → {GROQ_MODEL_VISION} (auto-selected when image is uploaded)."
+                f"**{PROVIDER_GROQ}**: {GROQ_MODEL_LARGE} / {GROQ_MODEL_SMALL} (text only)."
             ),
             label_visibility="collapsed",
         )
