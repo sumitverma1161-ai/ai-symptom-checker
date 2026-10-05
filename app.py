@@ -164,17 +164,6 @@ Response JSON schema (strictly follow this):
 
 
 # ─────────────────────────────────────────────────────────────────
-# Provider status badge helper
-# ─────────────────────────────────────────────────────────────────
-_PROVIDER_ICONS = {PROVIDER_GEMINI: "✨", PROVIDER_GROQ: "⚡"}
-
-def _provider_badge(provider: str, used_fallback: bool = False) -> str:
-    icon = _PROVIDER_ICONS.get(provider, "🤖")
-    suffix = " *(fallback)*" if used_fallback else ""
-    return f"{icon} **{provider}**{suffix}"
-
-
-# ─────────────────────────────────────────────────────────────────
 # Sidebar — Admin / Settings panel
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -211,8 +200,9 @@ with st.sidebar:
             index=0 if st.session_state.provider == PROVIDER_GEMINI else 1,
             format_func=lambda p: f"{'✨' if p == PROVIDER_GEMINI else '⚡'} {p}",
             help=(
-                f"**{PROVIDER_GEMINI}**: {GEMINI_MODEL} — multimodal, supports image upload.\n\n"
-                f"**{PROVIDER_GROQ}**: LLaMA 3 — ultra-fast text inference. Images are ignored."
+                f"**{PROVIDER_GEMINI}**: {GEMINI_MODEL} — full multimodal (text + images).\n\n"
+                f"**{PROVIDER_GROQ}**: text → {GROQ_MODEL_LARGE}/{GROQ_MODEL_SMALL} · "
+                f"vision → {GROQ_MODEL_VISION} (auto-selected when image is uploaded)."
             ),
             label_visibility="collapsed",
         )
@@ -874,3 +864,5 @@ elif st.session_state.page == "Lifestyle Guide":
     if st.session_state.guide_result:
         st.divider()
         display_guide(st.session_state.guide_result)
+
+

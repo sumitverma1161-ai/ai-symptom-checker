@@ -1,54 +1,98 @@
 """
 ai_providers.py
 ---------------
-Dual-provider AI backend for the Symptom Checker app.
+Dual-provider multimodal AI backend for the Symptom Checker app.
 
-Supported providers:
-  - Google Gemini  (model: gemini-3.8-flash)   — multimodal, supports image input
-  - Groq           (model: llama3-70b-8192 or llama3-8b-8192) — text only, ultra-fast
+Supported providers & models
+─────────────────────────────
+  Google Gemini  →  gemini-3.8-flash            (text + vision)
+  Groq           →  llama3-70b-8192             (text only)
+                    llama3-8b-8192              (text only, faster)
+                    meta-llama/llama-4-scout-17b-16e-instruct (vision — for image analysis)
+
+Image encoding
+──────────────
+  Gemini  : raw bytes   → types.Part.from_bytes(data=..., mime_type=...)
+  Groq    : base64 data URL  → "data:<mime>;base64,<b64string>"
+
+Fallback logic
+──────────────
+  • Any exception from the primary provider triggers fallback (if enabled).
+  • 503 / "high demand" / "overloaded" errors are detected and trigger
+    fallback even when auto_fallback is False (always-fallback-on-503).
 
 Public API
-----------
-  call_triage(prompt, gemini_key, groq_key, provider, groq_model, image_bytes, image_mime)
-      → dict   (parsed JSON result)
-
-  call_lifestyle(topic, gemini_key, groq_key, provider, groq_model)
-      → dict   (parsed JSON result)
-
-Both functions support automatic fallback: if the active provider fails, the
-other provider is tried automatically (if its key is configured).
+──────────
+  call_triage(...)           → (dict, provider_used_str)
+  call_lifestyle(...)        → (dict, provider_used_str)
+  call_vision_analysis(...)  → (dict, provider_used_str)   ← NEW
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import re
-from typing import Literal
+import urllib.error
+import urllib.request
 
-# ── Provider constants ────────────────────────────────────────────
+# ── Provider / model constants ────────────────────────────────────
 PROVIDER_GEMINI = "Google Gemini"
 PROVIDER_GROQ   = "Groq"
 
-GEMINI_MODEL       = "gemini-3.8-flash"
-GROQ_MODEL_LARGE   = "llama3-70b-8192"
-GROQ_MODEL_SMALL   = "llama3-8b-8192"
-GROQ_MODELS        = [GROQ_MODEL_LARGE, GROQ_MODEL_SMALL]
+GEMINI_MODEL              = "gemini-3.8-flash"
+
+GROQ_MODEL_LARGE          = "llama3-70b-8192"
+GROQ_MODEL_SMALL          = "llama3-8b-8192"
+GROQ_MODEL_VISION         = "meta-llama/llama-4-scout-17b-16e-instruct"   # Groq vision model
+
+# Text-only models shown in the Settings dropdown
+GROQ_MODELS               = [GROQ_MODEL_LARGE, GROQ_MODEL_SMALL]
+# All Groq models (text + vision) — used internally
+GROQ_ALL_MODELS           = [GROQ_MODEL_LARGE, GROQ_MODEL_SMALL, GROQ_MODEL_VISION]
 
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
 
 
 # ─────────────────────────────────────────────────────────────────
-# Low-level provider calls
+# Image helpers
 # ─────────────────────────────────────────────────────────────────
 
-def _call_gemini_triage(
+def _to_base64_data_url(image_bytes: bytes, mime_type: str) -> str:
+    """Encode raw image bytes as a base64 data URL for Groq vision."""
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{mime_type};base64,{b64}"
+
+
+# ─────────────────────────────────────────────────────────────────
+# 503 / overload detection
+# ─────────────────────────────────────────────────────────────────
+
+def _is_overload_error(exc: Exception) -> bool:
+    """Return True when the exception looks like a 503 / capacity error."""
+    msg = str(exc).lower()
+    markers = ("503", "service unavailable", "overloaded", "high demand",
+               "capacity", "rate limit", "too many requests", "429")
+    return any(m in msg for m in markers)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Low-level: Gemini calls
+# ─────────────────────────────────────────────────────────────────
+
+def _call_gemini(
     prompt: str,
     api_key: str,
     system_instruction: str,
     image_bytes: bytes | None = None,
     image_mime: str = "image/jpeg",
+    temperature: float = 0.2,
+    max_output_tokens: int = 2048,
 ) -> str:
-    """Call Gemini and return raw response text."""
+    """
+    Single unified Gemini call (text or text+image).
+    Returns raw response text.
+    """
     from google import genai
     from google.genai import types
 
@@ -67,29 +111,47 @@ def _call_gemini_triage(
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
-            temperature=0.2,
-            max_output_tokens=2048,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
         ),
     )
     return response.text
 
 
-def _call_gemini_lifestyle(prompt: str, api_key: str, system_instruction: str) -> str:
-    """Call Gemini for lifestyle guide and return raw response text."""
-    from google import genai
-    from google.genai import types
+# ─────────────────────────────────────────────────────────────────
+# Low-level: Groq calls  (OpenAI-compatible endpoint)
+# ─────────────────────────────────────────────────────────────────
 
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.4,
-            max_output_tokens=4096,
-        ),
-    )
-    return response.text
+def _build_groq_messages(
+    prompt: str,
+    system_instruction: str,
+    image_bytes: bytes | None = None,
+    image_mime: str = "image/jpeg",
+) -> list[dict]:
+    """
+    Build the messages array for Groq.
+    If image_bytes is provided, constructs a vision-compatible content list
+    using base64 data URL format (required by llama-3.2-11b-vision-preview).
+    """
+    messages = [{"role": "system", "content": system_instruction}]
+
+    if image_bytes:
+        data_url = _to_base64_data_url(image_bytes, image_mime)
+        user_content = [
+            {
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            },
+            {
+                "type": "text",
+                "text": prompt,
+            },
+        ]
+    else:
+        user_content = prompt
+
+    messages.append({"role": "user", "content": user_content})
+    return messages
 
 
 def _call_groq(
@@ -98,23 +160,29 @@ def _call_groq(
     system_instruction: str,
     model: str = GROQ_MODEL_LARGE,
     max_tokens: int = 2048,
+    temperature: float = 0.2,
+    image_bytes: bytes | None = None,
+    image_mime: str = "image/jpeg",
 ) -> str:
     """
-    Call Groq's OpenAI-compatible chat endpoint and return the assistant message text.
-    Note: Groq does not support image inputs — images are silently ignored.
+    Call Groq's OpenAI-compatible endpoint.
+    Automatically selects the vision model when image_bytes is provided
+    (overrides the passed model to llama-3.2-11b-vision-preview).
+    Returns raw assistant message text.
     """
-    import urllib.request
+    # Upgrade to vision model when an image is present
+    if image_bytes and model not in (GROQ_MODEL_VISION,):
+        model = GROQ_MODEL_VISION
 
-    url = f"{GROQ_API_BASE}/chat/completions"
+    messages = _build_groq_messages(prompt, system_instruction, image_bytes, image_mime)
+
+    url     = f"{GROQ_API_BASE}/chat/completions"
     payload = json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_instruction},
-            {"role": "user",   "content": prompt},
-        ],
-        "temperature": 0.2,
+        "model":       model,
+        "messages":    messages,
+        "temperature": temperature,
         "max_tokens":  max_tokens,
-        "stream": False,
+        "stream":      False,
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -126,14 +194,19 @@ def _call_groq(
             "Content-Type":  "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as http_err:
+        # Wrap with status code in message so _is_overload_error() picks it up
+        body = http_err.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Groq HTTP {http_err.code}: {body}") from http_err
 
     return data["choices"][0]["message"]["content"]
 
 
 # ─────────────────────────────────────────────────────────────────
-# JSON parse helper (shared)
+# JSON parse helper
 # ─────────────────────────────────────────────────────────────────
 
 def _parse(raw: str) -> dict:
@@ -145,16 +218,84 @@ def _parse(raw: str) -> dict:
     return json.loads(cleaned)
 
 
-# ─────────────────────────────────────────────────────────────────
-# Fallback helper
-# ─────────────────────────────────────────────────────────────────
-
 def _other_provider(provider: str) -> str:
     return PROVIDER_GROQ if provider == PROVIDER_GEMINI else PROVIDER_GEMINI
 
 
 # ─────────────────────────────────────────────────────────────────
-# Public: triage call
+# Generic dispatcher  (used by all public call_* functions)
+# ─────────────────────────────────────────────────────────────────
+
+def _dispatch(
+    prompt: str,
+    system_instruction: str,
+    gemini_key: str,
+    groq_key: str,
+    provider: str,
+    groq_model: str,
+    image_bytes: bytes | None,
+    image_mime: str,
+    max_tokens: int,
+    temperature: float,
+    auto_fallback: bool,
+) -> tuple[str, str]:
+    """
+    Core dispatch: try primary provider, fall back to secondary on any error
+    (always falls back on 503/overload regardless of auto_fallback flag).
+
+    Returns (raw_text, provider_used).
+    """
+    primary   = provider
+    secondary = _other_provider(provider)
+
+    def _try(prov: str) -> str:
+        if prov == PROVIDER_GEMINI:
+            if not gemini_key:
+                raise ValueError("Gemini API key is not configured.")
+            return _call_gemini(
+                prompt, gemini_key, system_instruction,
+                image_bytes=image_bytes, image_mime=image_mime,
+                temperature=temperature, max_output_tokens=max_tokens,
+            )
+        else:
+            if not groq_key:
+                raise ValueError("Groq API key is not configured.")
+            return _call_groq(
+                prompt, groq_key, system_instruction,
+                model=groq_model, max_tokens=max_tokens,
+                temperature=temperature,
+                image_bytes=image_bytes, image_mime=image_mime,
+            )
+
+    # ── Try primary ──────────────────────────────────────────────
+    primary_error: Exception | None = None
+    try:
+        return _try(primary), primary
+    except Exception as exc:
+        primary_error = exc
+
+    # ── Decide whether to fall back ──────────────────────────────
+    # Always fall back on 503/overload; otherwise respect the toggle.
+    should_fallback = auto_fallback or _is_overload_error(primary_error)
+
+    if should_fallback:
+        secondary_key = groq_key if secondary == PROVIDER_GROQ else gemini_key
+        if secondary_key:
+            try:
+                return _try(secondary), secondary
+            except Exception as sec_exc:
+                raise ProviderError(
+                    primary=primary,
+                    primary_error=primary_error,
+                    secondary=secondary,
+                    secondary_error=sec_exc,
+                )
+
+    raise ProviderError(primary=primary, primary_error=primary_error)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Public: triage  (symptom checker)
 # ─────────────────────────────────────────────────────────────────
 
 def call_triage(
@@ -168,55 +309,25 @@ def call_triage(
     image_mime: str = "image/jpeg",
     auto_fallback: bool = True,
 ) -> tuple[dict, str]:
-    """
-    Run the triage prompt through the selected provider.
-
-    Returns (result_dict, provider_used).
-    Raises ProviderError if both providers fail.
-    """
-    primary   = provider
-    secondary = _other_provider(provider)
-
-    def _try(prov: str) -> str:
-        if prov == PROVIDER_GEMINI:
-            if not gemini_key:
-                raise ValueError("Gemini API key is not configured.")
-            return _call_gemini_triage(prompt, gemini_key, system_instruction, image_bytes, image_mime)
-        else:
-            if not groq_key:
-                raise ValueError("Groq API key is not configured.")
-            # Groq doesn't support images — strip note to avoid confusing the model
-            text_only_prompt = prompt
-            return _call_groq(text_only_prompt, groq_key, system_instruction, groq_model, max_tokens=2048)
-
-    # ── Try primary ──────────────────────────────────────────────
-    primary_error = None
-    try:
-        raw = _try(primary)
-        return _parse(raw), primary
-    except Exception as exc:
-        primary_error = exc
-
-    # ── Auto-fallback to secondary ───────────────────────────────
-    if auto_fallback:
-        secondary_key = groq_key if secondary == PROVIDER_GROQ else gemini_key
-        if secondary_key:
-            try:
-                raw = _try(secondary)
-                return _parse(raw), secondary
-            except Exception as sec_exc:
-                raise ProviderError(
-                    primary=primary,
-                    primary_error=primary_error,
-                    secondary=secondary,
-                    secondary_error=sec_exc,
-                )
-
-    raise ProviderError(primary=primary, primary_error=primary_error)
+    """Returns (parsed_result_dict, provider_used)."""
+    raw, used = _dispatch(
+        prompt=prompt,
+        system_instruction=system_instruction,
+        gemini_key=gemini_key,
+        groq_key=groq_key,
+        provider=provider,
+        groq_model=groq_model,
+        image_bytes=image_bytes,
+        image_mime=image_mime,
+        max_tokens=2048,
+        temperature=0.2,
+        auto_fallback=auto_fallback,
+    )
+    return _parse(raw), used
 
 
 # ─────────────────────────────────────────────────────────────────
-# Public: lifestyle guide call
+# Public: lifestyle guide
 # ─────────────────────────────────────────────────────────────────
 
 def call_lifestyle(
@@ -228,48 +339,97 @@ def call_lifestyle(
     groq_model: str = GROQ_MODEL_LARGE,
     auto_fallback: bool = True,
 ) -> tuple[dict, str]:
-    """
-    Run the lifestyle guide prompt through the selected provider.
-
-    Returns (result_dict, provider_used).
-    """
+    """Returns (parsed_guide_dict, provider_used)."""
     prompt = f"Generate a comprehensive lifestyle guide on: {topic}"
+    raw, used = _dispatch(
+        prompt=prompt,
+        system_instruction=system_instruction,
+        gemini_key=gemini_key,
+        groq_key=groq_key,
+        provider=provider,
+        groq_model=groq_model,
+        image_bytes=None,
+        image_mime="image/jpeg",
+        max_tokens=4096,
+        temperature=0.4,
+        auto_fallback=auto_fallback,
+    )
+    return _parse(raw), used
 
-    def _try(prov: str) -> str:
-        if prov == PROVIDER_GEMINI:
-            if not gemini_key:
-                raise ValueError("Gemini API key is not configured.")
-            return _call_gemini_lifestyle(prompt, gemini_key, system_instruction)
-        else:
-            if not groq_key:
-                raise ValueError("Groq API key is not configured.")
-            return _call_groq(prompt, groq_key, system_instruction, groq_model, max_tokens=4096)
 
-    primary   = provider
-    secondary = _other_provider(provider)
-    primary_error = None
+# ─────────────────────────────────────────────────────────────────
+# Public: vision analysis  (email text / email screenshot)
+# ─────────────────────────────────────────────────────────────────
 
-    try:
-        raw = _try(primary)
-        return _parse(raw), primary
-    except Exception as exc:
-        primary_error = exc
+VISION_SYSTEM_INSTRUCTION = """You are an expert medical and health information analyst.
+Your task is to analyse the provided content — which may be email text, an email screenshot, or both — and extract any health-related information.
 
-    if auto_fallback:
-        secondary_key = groq_key if secondary == PROVIDER_GROQ else gemini_key
-        if secondary_key:
-            try:
-                raw = _try(secondary)
-                return _parse(raw), secondary
-            except Exception as sec_exc:
-                raise ProviderError(
-                    primary=primary,
-                    primary_error=primary_error,
-                    secondary=secondary,
-                    secondary_error=sec_exc,
-                )
+IMPORTANT RULES:
+1. Always respond with ONLY valid JSON — no markdown fences, no extra text.
+2. Be concise and use plain language.
+3. If an image is provided, carefully read all visible text and visual elements in the image.
+4. If both text and image are provided, combine insights from both.
+5. Never claim to be a doctor. This is informational only.
 
-    raise ProviderError(primary=primary, primary_error=primary_error)
+Response JSON schema (strictly follow this):
+{
+  "summary": "<2-3 sentence overview of what the email/content is about>",
+  "health_topics_detected": ["<topic 1>", "<topic 2>"],
+  "key_medical_terms": ["<term 1>", "<term 2>"],
+  "symptoms_mentioned": ["<symptom 1>", "<symptom 2>"],
+  "medications_mentioned": ["<medication 1>", "<medication 2>"],
+  "urgency_level": "<one of: LOW | MEDIUM | HIGH | EMERGENCY>",
+  "urgency_reason": "<1 sentence explaining the urgency level>",
+  "recommended_actions": ["<action 1>", "<action 2>"],
+  "red_flags": ["<concerning phrase or finding 1>", "<concerning phrase or finding 2>"],
+  "disclaimer": "This analysis is for informational purposes only and does not constitute medical advice."
+}
+"""
+
+
+def call_vision_analysis(
+    email_text: str,
+    gemini_key: str,
+    groq_key: str,
+    provider: str,
+    groq_model: str = GROQ_MODEL_LARGE,
+    image_bytes: bytes | None = None,
+    image_mime: str = "image/jpeg",
+    auto_fallback: bool = True,
+) -> tuple[dict, str]:
+    """
+    Analyse email text and/or an email screenshot image.
+
+    Image encoding:
+      Gemini → raw bytes via types.Part.from_bytes()
+      Groq   → base64 data URL via _to_base64_data_url() — uses llama-3.2-11b-vision-preview
+
+    Returns (parsed_analysis_dict, provider_used).
+    """
+    parts = []
+    if email_text.strip():
+        parts.append(f"Email content to analyse:\n\n{email_text.strip()}")
+    if image_bytes:
+        parts.append("An email screenshot has also been provided. Please read all text and visual elements in the image carefully.")
+    if not parts:
+        raise ValueError("Provide at least email text or an image to analyse.")
+
+    prompt = "\n\n".join(parts) + "\n\nPlease return the structured JSON analysis exactly as specified."
+
+    raw, used = _dispatch(
+        prompt=prompt,
+        system_instruction=VISION_SYSTEM_INSTRUCTION,
+        gemini_key=gemini_key,
+        groq_key=groq_key,
+        provider=provider,
+        groq_model=groq_model,
+        image_bytes=image_bytes,
+        image_mime=image_mime,
+        max_tokens=2048,
+        temperature=0.2,
+        auto_fallback=auto_fallback,
+    )
+    return _parse(raw), used
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -295,6 +455,8 @@ class ProviderError(Exception):
         msg = f"❌ **{self.primary}** failed: `{self.primary_error}`"
         if self.secondary and self.secondary_error:
             msg += f"\n\n❌ Fallback to **{self.secondary}** also failed: `{self.secondary_error}`"
+        elif self.secondary:
+            msg += f"\n\n_(Auto-fallback to **{self.secondary}** was attempted but its key is not configured.)_"
         return msg
 
     def __str__(self) -> str:
