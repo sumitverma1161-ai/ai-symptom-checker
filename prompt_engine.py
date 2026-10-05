@@ -7,13 +7,14 @@ import json
 import re
 
 SYSTEM_INSTRUCTION = """You are an expert medical triage assistant AI.
-Your role is to analyse the symptoms provided by the user and return a structured JSON response.
+Your role is to analyse the symptoms — and any medical image provided — and return a structured JSON response.
 
 IMPORTANT RULES:
 1. Always respond with ONLY valid JSON — no markdown fences, no extra text.
 2. Base your triage on standard medical guidelines (similar to NHS 111 / CDC guidance).
 3. Never claim to be a doctor. Always remind users that this is informational only.
 4. Be concise and use plain language a non-medical person can understand.
+5. If an image is provided, carefully examine it for visible signs (rashes, redness, swelling, discolouration, lesions, wounds, etc.) and factor your visual findings into the triage and possible conditions.
 
 Response JSON schema (strictly follow this):
 {
@@ -53,9 +54,11 @@ Triage level guidance:
 """
 
 
-def build_prompt(symptoms: str, age: str, gender: str, duration: str, extra_context: str) -> str:
+def build_prompt(symptoms: str, age: str, gender: str, duration: str, extra_context: str, has_image: bool = False) -> str:
     """Construct the user-turn prompt from form inputs."""
-    parts = [f"Patient symptoms: {symptoms.strip()}"]
+    parts = []
+    if symptoms.strip():
+        parts.append(f"Patient symptoms: {symptoms.strip()}")
     if age:
         parts.append(f"Age: {age}")
     if gender and gender != "Prefer not to say":
@@ -64,6 +67,12 @@ def build_prompt(symptoms: str, age: str, gender: str, duration: str, extra_cont
         parts.append(f"Duration of symptoms: {duration}")
     if extra_context.strip():
         parts.append(f"Additional context: {extra_context.strip()}")
+    if has_image:
+        parts.append(
+            "A medical image has been attached. Please carefully examine the image for any visible signs "
+            "of skin conditions, rashes, wounds, swelling, discolouration, or other abnormalities, "
+            "and include your visual findings in the triage assessment and possible conditions."
+        )
 
     parts.append(
         "\nPlease analyse these symptoms and return the structured JSON triage response exactly as specified."

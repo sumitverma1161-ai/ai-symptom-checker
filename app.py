@@ -115,12 +115,24 @@ if "page" not in st.session_state:
 # ─────────────────────────────────────────────────────────────────
 # Gemini helpers
 # ─────────────────────────────────────────────────────────────────
-def run_triage(api_key: str, user_prompt: str) -> dict:
-    """Send the symptom prompt to Gemini and return parsed JSON result."""
+def run_triage(api_key: str, user_prompt: str, image_bytes: bytes | None = None, image_mime: str = "image/jpeg") -> dict:
+    """
+    Send the symptom prompt to Gemini and return parsed JSON result.
+    If image_bytes is provided, sends a multimodal request (text + image).
+    """
     client = genai.Client(api_key=api_key)
+
+    if image_bytes:
+        contents = [
+            types.Part.from_bytes(data=image_bytes, mime_type=image_mime),
+            user_prompt,
+        ]
+    else:
+        contents = user_prompt
+
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=user_prompt,
+        model="gemini-2.0-flash",
+        contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             temperature=0.2,
@@ -361,6 +373,25 @@ if st.session_state.page == "Symptom Checker":
             height=80,
         )
 
+        st.markdown("---")
+        st.markdown("📷 **Upload a Medical Image** *(optional)*")
+        uploaded_image = st.file_uploader(
+            "Upload a photo of a rash, wound, skin condition, or any visible symptom",
+            type=["jpg", "jpeg", "png", "webp"],
+            help=(
+                "Gemini will analyse the image together with your described symptoms. "
+                "Supported: skin rashes, wounds, eye conditions, swelling, etc. "
+                "Max 20 MB. Images are sent directly to Gemini and not stored."
+            ),
+        )
+
+        if uploaded_image is not None:
+            st.image(
+                uploaded_image,
+                caption=f"📎 {uploaded_image.name}  ({uploaded_image.size / 1024:.1f} KB)",
+                use_container_width=True,
+            )
+
         submitted = st.form_submit_button(
             "🔍 Analyse Symptoms", use_container_width=True, type="primary"
         )
@@ -369,19 +400,32 @@ if st.session_state.page == "Symptom Checker":
         if not api_key_input.strip():
             st.error("🔑 Please enter your Gemini API key in the sidebar.")
             st.stop()
-        if not symptoms.strip():
-            st.error("📝 Please describe your symptoms before submitting.")
+        if not symptoms.strip() and uploaded_image is None:
+            st.error("📝 Please describe your symptoms or upload an image before submitting.")
             st.stop()
 
-        user_prompt = build_prompt(symptoms, age, gender, duration, extra_context)
+        # Read image bytes + MIME type if provided
+        image_bytes = None
+        image_mime = "image/jpeg"
+        if uploaded_image is not None:
+            image_bytes = uploaded_image.read()
+            mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+            ext = uploaded_image.name.rsplit(".", 1)[-1].lower()
+            image_mime = mime_map.get(ext, "image/jpeg")
 
-        with st.spinner("🤖 Analysing symptoms with Gemini 3.6 Flash…"):
+        user_prompt = build_prompt(symptoms, age, gender, duration, extra_context, has_image=image_bytes is not None)
+
+        spinner_msg = (
+            "🤖 Analysing symptoms + image with Gemini…"
+            if image_bytes else
+            "🤖 Analysing symptoms with Gemini…"
+        )
+        with st.spinner(spinner_msg):
             try:
-                result = run_triage(api_key_input.strip(), user_prompt)
+                result = run_triage(api_key_input.strip(), user_prompt, image_bytes, image_mime)
                 st.session_state.result = result
-                st.session_state.history.append(
-                    {"symptoms": symptoms[:80] + ("…" if len(symptoms) > 80 else ""), "result": result}
-                )
+                label = symptoms[:80] + ("…" if len(symptoms) > 80 else "") if symptoms.strip() else f"[Image: {uploaded_image.name}]"
+                st.session_state.history.append({"symptoms": label, "result": result})
             except json.JSONDecodeError:
                 st.error("⚠️ The AI returned an unexpected response format. Please try again.")
                 st.stop()
