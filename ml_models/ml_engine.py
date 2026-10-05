@@ -4,22 +4,34 @@ ml_engine.py
 Offline ML inference engine for the Symptom Checker app.
 
 Provides two predictors:
-  1. TextPredictor  — maps free-text symptom descriptions to diseases
-                      using the trained RandomForest+GB ensemble (.pkl)
+  1. TextPredictor  — maps free-text symptom descriptions to diseases.
+                      Loads pre-trained .pkl files if they exist, OR
+                      auto-trains from the Kaggle dataset via kagglehub
+                      (works on Streamlit Cloud — no manual CSV needed).
   2. ImagePredictor — classifies uploaded medical/skin images
                       using the fine-tuned MobileNetV2 (.pth)
 
 Both predictors gracefully degrade when model files are missing
 (they return informative placeholder results instead of crashing).
+
+Streamlit Cloud notes:
+  - Model artifacts are cached in /tmp/ml_models/ (writable on Cloud).
+  - Set KAGGLE_USERNAME and KAGGLE_KEY in Streamlit Secrets to enable
+    auto-training of the text model on first load.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import os
 import re
+import tempfile
+import warnings
 from pathlib import Path
 from typing import Optional
+
+warnings.filterwarnings("ignore")
 
 # ── Lazy imports (only loaded when actually used) ─────────────────
 _np = None
@@ -30,6 +42,22 @@ _models = None
 _Image = None
 
 MODEL_DIR = Path(__file__).parent
+
+# On Streamlit Cloud the repo is read-only; use /tmp for trained artifacts
+_TMP_MODEL_DIR = Path(tempfile.gettempdir()) / "ml_models"
+_TMP_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _model_path(filename: str) -> Path:
+    """
+    Return the path for a model artifact.
+    Prefer the repo-local path (exists when committed or trained locally),
+    fall back to the /tmp cache path (used on Streamlit Cloud).
+    """
+    local = MODEL_DIR / filename
+    if local.exists():
+        return local
+    return _TMP_MODEL_DIR / filename
 
 
 def _load_numpy():
@@ -79,6 +107,129 @@ def _load_meta(path: Path) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
+# Kaggle credential injection (Streamlit Cloud secrets → env vars)
+# ─────────────────────────────────────────────────────────────────
+
+def _inject_kaggle_credentials():
+    """
+    Streamlit Cloud stores secrets as st.secrets.
+    kagglehub reads KAGGLE_USERNAME / KAGGLE_KEY from env vars.
+    This function bridges the two — safe to call even outside Streamlit.
+    """
+    # Already set — nothing to do
+    if os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"):
+        return
+    try:
+        import streamlit as st
+        username = st.secrets.get("KAGGLE_USERNAME", "")
+        key      = st.secrets.get("KAGGLE_KEY", "")
+        if username and key:
+            os.environ["KAGGLE_USERNAME"] = username
+            os.environ["KAGGLE_KEY"]      = key
+    except Exception:
+        pass  # Not running inside Streamlit, or secrets not configured
+
+
+# ─────────────────────────────────────────────────────────────────
+# In-process training (used when .pkl files are absent)
+# ─────────────────────────────────────────────────────────────────
+
+def _train_text_model_inprocess(out_dir: Path, jl) -> dict:
+    """
+    Download the Kaggle dataset via kagglehub, train the RF+GB ensemble
+    entirely in-process, persist artifacts to out_dir, and return them.
+    """
+    import kagglehub
+    import pandas as pd
+    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
+    from sklearn.preprocessing import LabelEncoder
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score
+
+    np = _load_numpy()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 1. Download dataset ──────────────────────────────────────
+    dataset_path = Path(
+        kagglehub.dataset_download("kaushil268/disease-prediction-using-machine-learning")
+    )
+
+    def _find_csv(base: Path, prefix: str) -> Path:
+        matches = sorted(base.rglob(f"{prefix}*.csv"))
+        if not matches:
+            raise FileNotFoundError(f"'{prefix}*.csv' not found inside {base}")
+        return matches[0]
+
+    train_df = pd.read_csv(_find_csv(dataset_path, "Training"))
+    test_df  = pd.read_csv(_find_csv(dataset_path, "Testing"))
+
+    for df in (train_df, test_df):
+        df.drop(columns=[c for c in df.columns if c.startswith("Unnamed")],
+                inplace=True, errors="ignore")
+
+    df = pd.concat([train_df, test_df], ignore_index=True)
+
+    # ── 2. Encode labels ─────────────────────────────────────────
+    le = LabelEncoder()
+    y  = le.fit_transform(df["prognosis"])
+    X  = df.drop(columns=["prognosis"]).astype(int)
+    symptom_columns = list(X.columns)
+
+    X_tr, X_te, y_tr, y_te = train_test_split(
+        X, y, test_size=0.15, random_state=42, stratify=y
+    )
+
+    # ── 3. Train ensemble (lighter settings for cloud speed) ─────
+    rf = RandomForestClassifier(
+        n_estimators=100, max_depth=None, random_state=42,
+        n_jobs=-1, class_weight="balanced"
+    )
+    gb = GradientBoostingClassifier(
+        n_estimators=80, learning_rate=0.1, max_depth=5, random_state=42
+    )
+    ensemble = VotingClassifier(
+        estimators=[("rf", rf), ("gb", gb)], voting="soft", n_jobs=-1
+    )
+    ensemble.fit(X_tr, y_tr)
+    acc = accuracy_score(y_te, ensemble.predict(X_te))
+
+    # ── 4. Build keyword map ──────────────────────────────────────
+    kw_map: dict[str, str] = {}
+    for col in symptom_columns:
+        readable = col.replace("_", " ")
+        kw_map[readable] = col
+        kw_map[col]      = col
+        kw_map[col.replace("_", "")] = col
+
+    # ── 5. Persist to out_dir ─────────────────────────────────────
+    jl.dump(ensemble,        out_dir / "text_model.pkl")
+    jl.dump(symptom_columns, out_dir / "symptom_columns.pkl")
+    jl.dump(le,              out_dir / "label_encoder.pkl")
+    jl.dump(kw_map,          out_dir / "symptom_keyword_map.pkl")
+
+    meta = {
+        "model_type": "VotingClassifier(RF+GB)",
+        "num_classes": int(len(le.classes_)),
+        "classes": list(le.classes_),
+        "num_symptoms": len(symptom_columns),
+        "test_accuracy": round(float(acc), 4),
+        "dataset": "Kaggle Disease Prediction (kaushil268)",
+        "dataset_url": "https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning",
+        "trained_at_runtime": True,
+    }
+    with open(out_dir / "model_meta.json", "w") as f:
+        json.dump(meta, f, indent=2)
+
+    return {
+        "model":   ensemble,
+        "columns": symptom_columns,
+        "le":      le,
+        "kw_map":  kw_map,
+        "meta":    meta,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────
 # TEXT PREDICTOR
 # ─────────────────────────────────────────────────────────────────
 
@@ -114,32 +265,66 @@ class TextPredictor:
 
     def _try_load(self):
         jl = _load_joblib()
-        required = [
-            MODEL_DIR / "text_model.pkl",
-            MODEL_DIR / "symptom_columns.pkl",
-            MODEL_DIR / "label_encoder.pkl",
-        ]
-        missing = [str(p) for p in required if not p.exists()]
-        if missing:
+
+        model_pkl   = _model_path("text_model.pkl")
+        cols_pkl    = _model_path("symptom_columns.pkl")
+        le_pkl      = _model_path("label_encoder.pkl")
+        kw_pkl      = _model_path("symptom_keyword_map.pkl")
+        meta_json   = _model_path("model_meta.json")
+
+        # ── If all artifacts exist, load them directly ─────────
+        if model_pkl.exists() and cols_pkl.exists() and le_pkl.exists():
+            try:
+                self._model   = jl.load(model_pkl)
+                self._columns = jl.load(cols_pkl)
+                self._le      = jl.load(le_pkl)
+                if kw_pkl.exists():
+                    self._kw_map = jl.load(kw_pkl)
+                self._meta = _load_meta(meta_json)
+                self._loaded = True
+            except Exception as exc:
+                self._load_error = f"Failed to load text model: {exc}"
+            return
+
+        # ── Artifacts missing — attempt auto-training via kagglehub ──
+        # Inject Kaggle credentials from environment / Streamlit secrets
+        _inject_kaggle_credentials()
+
+        try:
+            import kagglehub
+        except ImportError:
             self._load_error = (
-                "Text model files not found. Run:\n"
-                "  python ml_models/train_text_model.py\n"
-                "after placing Training.csv in ml_models/data/\n"
-                f"Missing: {', '.join(missing)}"
+                "Text model not found and kagglehub is not installed.\n"
+                "Run:  pip install kagglehub\n"
+                "Then set KAGGLE_USERNAME and KAGGLE_KEY in your environment\n"
+                "or in Streamlit Secrets, and restart the app."
             )
             return
 
         try:
-            self._model = jl.load(MODEL_DIR / "text_model.pkl")
-            self._columns = jl.load(MODEL_DIR / "symptom_columns.pkl")
-            self._le = jl.load(MODEL_DIR / "label_encoder.pkl")
-            kw_path = MODEL_DIR / "symptom_keyword_map.pkl"
-            if kw_path.exists():
-                self._kw_map = jl.load(kw_path)
-            self._meta = _load_meta(MODEL_DIR / "model_meta.json")
-            self._loaded = True
+            print("[ml_engine] Auto-training text model via kagglehub …")
+            _artifacts = _train_text_model_inprocess(
+                out_dir=_TMP_MODEL_DIR, jl=jl
+            )
+            self._model   = _artifacts["model"]
+            self._columns = _artifacts["columns"]
+            self._le      = _artifacts["le"]
+            self._kw_map  = _artifacts["kw_map"]
+            self._meta    = _artifacts["meta"]
+            self._loaded  = True
+            print("[ml_engine] Text model ready.")
         except Exception as exc:
-            self._load_error = f"Failed to load text model: {exc}"
+            self._load_error = (
+                f"Auto-training failed: {exc}\n\n"
+                "To fix on Streamlit Cloud:\n"
+                "  1. Go to App Settings → Secrets\n"
+                "  2. Add:  KAGGLE_USERNAME = \"your_username\"\n"
+                "           KAGGLE_KEY = \"your_api_key\"\n"
+                "  3. Reboot the app.\n\n"
+                "To fix locally:\n"
+                "  Place Training.csv in ml_models/data/ then run:\n"
+                "  python ml_models/train_text_model.py"
+            )
 
     # ── Public API ───────────────────────────────────────────────
 

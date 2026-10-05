@@ -11,8 +11,9 @@ venv/
 .venv/
 env/
 
-# Streamlit cache
-.streamlit/
+# Streamlit — ignore real secrets, keep example file
+.streamlit/secrets.toml
+.streamlit/cache/
 
 # OS files
 .DS_Store

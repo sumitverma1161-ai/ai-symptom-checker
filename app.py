@@ -27,7 +27,14 @@ from prompt_engine import (
 
 # ── Make ml_models importable regardless of working directory ────
 sys.path.insert(0, str(Path(__file__).parent))
-from ml_models.ml_engine import predict_from_text, predict_from_image, get_model_status
+from ml_models.ml_engine import (
+    predict_from_text, predict_from_image, get_model_status,
+    _inject_kaggle_credentials, TextPredictor,
+)
+
+# ── On Streamlit Cloud, trigger auto-training at startup ──────────
+# Inject Kaggle creds from st.secrets before any predictor loads
+_inject_kaggle_credentials()
 
 # ─────────────────────────────────────────────────────────────────
 # Page configuration
@@ -292,13 +299,40 @@ with st.sidebar:
     # ── Offline ML model status ────────────────────────────────
     st.markdown("**🧠 Offline ML Models**")
     status = get_model_status()
-    _render_model_status_badge(status["text_model"]["ready"], "Text Disease Model")
+    text_ready = status["text_model"]["ready"]
+    text_error = status["text_model"].get("error", "")
+
+    _render_model_status_badge(text_ready, "Text Disease Model")
     _render_model_status_badge(status["image_model"]["ready"], "Image Classifier")
+
+    # Show auto-training status if model isn't ready yet
+    if not text_ready and text_error:
+        if "KAGGLE_USERNAME" in text_error or "Auto-training failed" in text_error:
+            st.sidebar.error(
+                "⚙️ **Text model needs Kaggle credentials.**\n\n"
+                "Add to **App Settings → Secrets**:\n"
+                "```toml\n"
+                "KAGGLE_USERNAME = \"your_username\"\n"
+                "KAGGLE_KEY = \"your_api_key\"\n"
+                "```\n"
+                "Then reboot the app — it will train automatically.",
+                icon="🔑",
+            )
+        else:
+            st.sidebar.info("⏳ Text model will train on first use (needs Kaggle key).")
 
     with st.expander("ℹ️ Training Instructions", expanded=False):
         st.markdown(
             """
-**Text Model (Disease Prediction):**
+**☁️ Streamlit Cloud (automatic):**
+1. Go to App Settings → Secrets and add:
+```toml
+KAGGLE_USERNAME = "your_username"
+KAGGLE_KEY = "your_api_key"
+```
+2. Reboot the app — model trains automatically on first load.
+
+**💻 Local (manual):**
 1. Download [Training.csv from Kaggle](https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning)
 2. Place it in `ml_models/data/`
 3. Run: `python ml_models/train_text_model.py`
@@ -663,11 +697,18 @@ elif st.session_state.page == "ML Diagnosis":
 | Image Classifier | Medical Imaging Collections | [The Cancer Imaging Archive](https://www.cancerimagingarchive.net/) |
 | Image Classifier | MedImg Dataset | [CUI Lab / MedImg](https://www.cuilab.cn/medimg/) |
 
-> Models must be trained locally before use. See sidebar for training instructions.
+> Models are auto-downloaded and trained on Streamlit Cloud if Kaggle credentials are set in Secrets.
 """
         )
 
     st.divider()
+
+    # ── Auto-train spinner (shown only while training on first load) ──
+    _ts = get_model_status()["text_model"]
+    if not _ts["ready"] and not _ts.get("error"):
+        with st.spinner("⏳ Training ML model from Kaggle dataset… this takes ~2 minutes on first load."):
+            TextPredictor.get()   # blocks until training completes
+        st.rerun()
 
     # ════════════════════════════════════════════════════════════
     # TAB A — Text Symptom Prediction
@@ -684,14 +725,25 @@ elif st.session_state.page == "ML Diagnosis":
 
         text_status = get_model_status()["text_model"]
         if not text_status["ready"]:
-            st.warning(
-                f"⚠️ Text model not loaded.\n\n```\n{text_status['error']}\n```",
-                icon="🚧",
-            )
+            err = text_status.get("error", "")
+            if "KAGGLE_USERNAME" in err or "Auto-training failed" in err or "kagglehub" in err:
+                st.error(
+                    "🔑 **Kaggle credentials required for auto-training.**\n\n"
+                    "Go to **App Settings → Secrets** and add:\n"
+                    "```toml\n"
+                    "KAGGLE_USERNAME = \"your_username\"\n"
+                    "KAGGLE_KEY = \"your_api_key\"\n"
+                    "```\n"
+                    "Then reboot — the model will train automatically (~2 min).",
+                )
+            else:
+                st.warning(f"⚠️ Text model not loaded.\n\n```\n{err}\n```", icon="🚧")
         else:
+            trained_rt = text_status["meta"].get("trained_at_runtime", False)
             st.success(
-                f"✅ Model ready — {text_status['meta'].get('num_classes', '?')} diseases, "
-                f"accuracy {text_status['meta'].get('test_accuracy', 'N/A')}",
+                f"✅ Model ready — {text_status['meta'].get('num_classes', '?')} diseases · "
+                f"accuracy {text_status['meta'].get('test_accuracy', 'N/A')}"
+                + (" · *(trained at runtime)*" if trained_rt else ""),
                 icon="🤖",
             )
 
