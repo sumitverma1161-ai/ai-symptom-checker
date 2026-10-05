@@ -1,6 +1,6 @@
 """
 app.py  —  AI-Powered Symptom Checker + Lifestyle Guide
-Dual-provider AI backend: Google Gemini 3.8 Flash  OR  Groq (LLaMA 3).
+AI backend: Google Gemini Flash
 
 Run:
     streamlit run app.py
@@ -24,10 +24,6 @@ from ai_providers import (
     call_lifestyle,
     ProviderError,
     PROVIDER_GEMINI,
-    PROVIDER_GROQ,
-    GROQ_MODELS,
-    GROQ_MODEL_LARGE,
-    GROQ_MODEL_SMALL,
     GEMINI_MODEL,
 )
 
@@ -112,13 +108,10 @@ load_dotenv()
 # Session state initialisation
 # ─────────────────────────────────────────────────────────────────
 for _k, _v in [
-    ("history",       []),
-    ("result",        None),
-    ("guide_result",  None),
-    ("page",          "Symptom Checker"),
-    ("provider",      PROVIDER_GEMINI),
-    ("groq_model",    GROQ_MODEL_LARGE),
-    ("auto_fallback", True),
+    ("history",      []),
+    ("result",       None),
+    ("guide_result", None),
+    ("page",         "Symptom Checker"),
 ]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -165,16 +158,14 @@ Response JSON schema (strictly follow this):
 
 
 # ─────────────────────────────────────────────────────────────────
-# Sidebar — Admin / Settings panel
+# Sidebar — Settings panel
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🩺 AI Health Assistant")
     st.divider()
 
-    # ── ⚙️ AI Settings expander ──────────────────────────────────
     with st.expander("⚙️ AI Settings", expanded=True):
-
-        st.markdown("##### 🔑 API Keys")
+        st.markdown("##### 🔑 API Key")
 
         gemini_env = os.getenv("GEMINI_API_KEY", "")
         gemini_key = st.text_input(
@@ -185,66 +176,12 @@ with st.sidebar:
             help="Get a free key at https://aistudio.google.com/app/apikey",
         )
 
-        groq_env = os.getenv("GROQ_API_KEY", "")
-        groq_key = st.text_input(
-            "Groq API Key",
-            value=groq_env,
-            type="password",
-            placeholder="gsk_…",
-            help="Get a free key at https://console.groq.com/keys",
-        )
+        st.caption(f"🎯 Model: `{GEMINI_MODEL}`")
 
-        st.markdown("##### 🤖 Active Provider")
-        provider = st.radio(
-            "Select AI provider",
-            options=[PROVIDER_GEMINI, PROVIDER_GROQ],
-            index=0 if st.session_state.provider == PROVIDER_GEMINI else 1,
-            format_func=lambda p: f"{'✨' if p == PROVIDER_GEMINI else '⚡'} {p}",
-            help=(
-                f"**{PROVIDER_GEMINI}**: {GEMINI_MODEL} — full multimodal (text + images).\n\n"
-                f"**{PROVIDER_GROQ}**: {GROQ_MODEL_LARGE} / {GROQ_MODEL_SMALL} (text only)."
-            ),
-            label_visibility="collapsed",
-        )
-        st.session_state.provider = provider
-
-        # Groq sub-options (only shown when Groq is selected)
-        if provider == PROVIDER_GROQ:
-            groq_model = st.selectbox(
-                "Groq Model",
-                options=GROQ_MODELS,
-                index=GROQ_MODELS.index(st.session_state.groq_model)
-                      if st.session_state.groq_model in GROQ_MODELS else 0,
-                help="llama3-70b-8192 = higher quality · llama3-8b-8192 = faster",
-            )
-            st.session_state.groq_model = groq_model
+        if gemini_key:
+            st.success("Gemini ✅", icon="✨")
         else:
-            groq_model = st.session_state.groq_model
-
-        # Active model display
-        active_model = GEMINI_MODEL if provider == PROVIDER_GEMINI else groq_model
-        st.caption(f"🎯 Model: `{active_model}`")
-
-        # Key validation badges
-        k_col1, k_col2 = st.columns(2)
-        with k_col1:
-            if gemini_key:
-                st.success("Gemini ✅", icon="✨")
-            else:
-                st.warning("Gemini —", icon="✨")
-        with k_col2:
-            if groq_key:
-                st.success("Groq ✅", icon="⚡")
-            else:
-                st.warning("Groq —", icon="⚡")
-
-        st.markdown("##### 🔄 Fallback")
-        auto_fallback = st.toggle(
-            "Auto-fallback to other provider on error",
-            value=st.session_state.auto_fallback,
-            help="If the active provider fails (e.g. 503 overload), automatically retry with the other provider.",
-        )
-        st.session_state.auto_fallback = auto_fallback
+            st.warning("No API key entered", icon="✨")
 
     st.divider()
     st.caption(
@@ -273,7 +210,7 @@ with hdr_left:
         AI Health Assistant
     </h1>
     <p style="color:#4a7a8a;font-size:0.95rem;margin:0;">
-        Gemini 3.8 Flash &amp; Groq LLaMA 3 — switchable
+        Powered by Google Gemini Flash
     </p>
 </div>
 """,
@@ -317,7 +254,7 @@ with hdr_right:
             st.session_state.page = "Lifestyle Guide"
             st.rerun()
 
-    # ── Triage legend stacked vertically on the right ────
+    # ── Triage legend (only on Symptom Checker page) ────
     if st.session_state.page == "Symptom Checker":
         st.markdown(
             """
@@ -439,14 +376,8 @@ if st.session_state.page == "Symptom Checker":
         )
 
     if submitted:
-        # ── Validate: at least one key for the active provider ───
-        active_key = gemini_key if provider == PROVIDER_GEMINI else groq_key
-        if not active_key.strip():
-            other = PROVIDER_GROQ if provider == PROVIDER_GEMINI else PROVIDER_GEMINI
-            st.error(
-                f"🔑 No API key for **{provider}**. "
-                f"Enter it in the ⚙️ AI Settings panel, or switch to **{other}**."
-            )
+        if not gemini_key.strip():
+            st.error("🔑 No Gemini API key. Enter it in the ⚙️ AI Settings panel on the left.")
             st.stop()
         if not symptoms.strip() and uploaded_image is None:
             st.error("📝 Please describe your symptoms or upload an image before submitting.")
@@ -460,41 +391,31 @@ if st.session_state.page == "Symptom Checker":
             mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
             ext = uploaded_image.name.rsplit(".", 1)[-1].lower()
             image_mime = mime_map.get(ext, "image/jpeg")
-            if provider == PROVIDER_GROQ and image_bytes:
-                st.warning("⚡ Groq (LLaMA 3) does not support image input. The image will be ignored — switch to Gemini for image analysis.", icon="⚠️")
 
         user_prompt = build_prompt(
             symptoms, age, gender, duration, extra_context,
-            has_image=image_bytes is not None and provider == PROVIDER_GEMINI,
+            has_image=image_bytes is not None,
             location=location,
         )
 
-        active_icon = "✨" if provider == PROVIDER_GEMINI else "⚡"
-        spinner_msg = f"{active_icon} Analysing with **{provider}**…"
-        with st.spinner(spinner_msg):
+        with st.spinner("✨ Analysing with Gemini…"):
             try:
                 result, provider_used = call_triage(
-                    prompt          = user_prompt,
+                    prompt             = user_prompt,
                     system_instruction = SYSTEM_INSTRUCTION,
-                    gemini_key      = gemini_key,
-                    groq_key        = groq_key,
-                    provider        = provider,
-                    groq_model      = groq_model,
-                    image_bytes     = image_bytes if provider == PROVIDER_GEMINI else None,
-                    image_mime      = image_mime,
-                    auto_fallback   = auto_fallback,
+                    gemini_key         = gemini_key,
+                    groq_key           = "",
+                    provider           = PROVIDER_GEMINI,
+                    groq_model         = "",
+                    image_bytes        = image_bytes,
+                    image_mime         = image_mime,
+                    auto_fallback      = False,
                 )
                 result["_location"]      = location.strip()
                 result["_provider_used"] = provider_used
-                result["_used_fallback"] = provider_used != provider
                 st.session_state.result  = result
                 label = symptoms[:80] + ("…" if len(symptoms) > 80 else "") if symptoms.strip() else f"[Image: {uploaded_image.name}]"
                 st.session_state.history.append({"symptoms": label, "result": result})
-                if result["_used_fallback"]:
-                    st.warning(
-                        f"⚠️ **{provider}** failed — result was generated by **{provider_used}** (auto-fallback).",
-                        icon="🔄",
-                    )
             except json.JSONDecodeError:
                 st.error("⚠️ The AI returned an unexpected response format. Please try again.")
                 st.stop()
@@ -526,7 +447,7 @@ if st.session_state.page == "Symptom Checker":
         {result.get('triage_summary', '')}
     </p>
     <p style="color:{meta['color']};margin:6px 0 0 0;font-size:0.78rem;opacity:0.75;">
-        {'✨' if result.get('_provider_used') == PROVIDER_GEMINI else '⚡'} Generated by {result.get('_provider_used', 'AI')}{'&nbsp;·&nbsp;<em>fallback</em>' if result.get('_used_fallback') else ''}
+        ✨ Generated by Google Gemini
     </p>
 </div>
 """,
@@ -625,7 +546,6 @@ if st.session_state.page == "Symptom Checker":
             st.markdown("### 🩺 Recommended Specialists & Doctors")
             st.caption("Based on your symptoms, these are the types of doctors you should consider consulting.")
 
-            # ── Nearby search links ───────────────────────────────────
             user_loc = result.get("_location", "").strip()
             location_query = user_loc if user_loc else "near me"
             encoded_loc = location_query.replace(" ", "+")
@@ -633,14 +553,11 @@ if st.session_state.page == "Symptom Checker":
             st.markdown("#### 📍 Find Nearby Hospitals & Doctors")
             search_cols = st.columns(3)
             with search_cols[0]:
-                maps_url = f"https://www.google.com/maps/search/hospital+{encoded_loc}"
-                st.link_button("🏥 Hospitals Nearby", maps_url, use_container_width=True)
+                st.link_button("🏥 Hospitals Nearby", f"https://www.google.com/maps/search/hospital+{encoded_loc}", use_container_width=True)
             with search_cols[1]:
-                gp_url = f"https://www.google.com/maps/search/doctor+clinic+{encoded_loc}"
-                st.link_button("👨‍⚕️ Doctors / Clinics", gp_url, use_container_width=True)
+                st.link_button("👨‍⚕️ Doctors / Clinics", f"https://www.google.com/maps/search/doctor+clinic+{encoded_loc}", use_container_width=True)
             with search_cols[2]:
-                er_url = f"https://www.google.com/maps/search/emergency+hospital+{encoded_loc}"
-                st.link_button("🚨 Emergency / A&E", er_url, use_container_width=True)
+                st.link_button("🚨 Emergency / A&E", f"https://www.google.com/maps/search/emergency+hospital+{encoded_loc}", use_container_width=True)
 
             if user_loc:
                 st.caption(f"🌐 Showing results near **{user_loc}**")
@@ -659,7 +576,6 @@ if st.session_state.page == "Symptom Checker":
                     st.markdown(f"#### 👨‍⚕️ {specialty}")
                     st.info(f"**Why this specialist?** {why}")
 
-                    # Nearby search for this specialty
                     spec_query = f"{specialty}+{encoded_loc}"
                     st.link_button(
                         f"🔍 Find {specialty} near {user_loc or 'me'}",
@@ -754,13 +670,8 @@ elif st.session_state.page == "Lifestyle Guide":
         )
 
     if guide_submitted:
-        active_key = gemini_key if provider == PROVIDER_GEMINI else groq_key
-        if not active_key.strip():
-            other = PROVIDER_GROQ if provider == PROVIDER_GEMINI else PROVIDER_GEMINI
-            st.error(
-                f"🔑 No API key for **{provider}**. "
-                f"Enter it in the ⚙️ AI Settings panel, or switch to **{other}**."
-            )
+        if not gemini_key.strip():
+            st.error("🔑 No Gemini API key. Enter it in the ⚙️ AI Settings panel on the left.")
             st.stop()
         if not guide_topic.strip():
             st.error("📝 Please enter a health topic.")
@@ -768,26 +679,18 @@ elif st.session_state.page == "Lifestyle Guide":
 
         st.session_state["guide_topic_prefill"] = guide_topic
 
-        active_icon = "✨" if provider == PROVIDER_GEMINI else "⚡"
-        with st.spinner(f"{active_icon} Generating guide with **{provider}**…"):
+        with st.spinner("✨ Generating guide with Gemini…"):
             try:
                 guide, provider_used = call_lifestyle(
                     topic              = guide_topic,
                     system_instruction = LIFESTYLE_SYSTEM,
                     gemini_key         = gemini_key,
-                    groq_key           = groq_key,
-                    provider           = provider,
-                    groq_model         = groq_model,
-                    auto_fallback      = auto_fallback,
+                    groq_key           = "",
+                    provider           = PROVIDER_GEMINI,
+                    groq_model         = "",
+                    auto_fallback      = False,
                 )
-                guide["_provider_used"] = provider_used
-                guide["_used_fallback"] = provider_used != provider
                 st.session_state.guide_result = guide
-                if guide["_used_fallback"]:
-                    st.warning(
-                        f"⚠️ **{provider}** failed — guide was generated by **{provider_used}** (auto-fallback).",
-                        icon="🔄",
-                    )
             except json.JSONDecodeError:
                 st.error("⚠️ The AI returned an unexpected format. Please try again.")
                 st.stop()
@@ -804,9 +707,7 @@ elif st.session_state.page == "Lifestyle Guide":
         st.info(guide.get("introduction", ""))
         st.divider()
 
-        # ── Sections ──────────────────────────────────────────────
-        sections = guide.get("sections", [])
-        for section in sections:
+        for section in guide.get("sections", []):
             icon = section.get("icon", "•")
             heading = section.get("heading", "")
             summary = section.get("summary", "")
@@ -821,7 +722,6 @@ elif st.session_state.page == "Lifestyle Guide":
 
             st.divider()
 
-        # ── Daily Routine ──────────────────────────────────────────
         routine = guide.get("daily_routine", {})
         if routine:
             st.markdown("### 🗓️ Suggested Daily Routine")
@@ -840,7 +740,6 @@ elif st.session_state.page == "Lifestyle Guide":
                     st.markdown(f"- {item}")
             st.divider()
 
-        # ── Trigger Checklist ──────────────────────────────────────
         triggers = guide.get("trigger_checklist", [])
         if triggers:
             st.markdown("### ⚠️ Common Triggers Checklist")
@@ -851,18 +750,14 @@ elif st.session_state.page == "Lifestyle Guide":
                     st.checkbox(trigger, key=f"trigger_{i}")
             st.divider()
 
-        # ── When to see a doctor ───────────────────────────────────
         when_doc = guide.get("when_to_see_doctor", "")
         if when_doc:
             st.markdown("### 🏥 When to See a Doctor")
             st.warning(f"🔔 {when_doc}")
             st.divider()
 
-        # ── Disclaimer ─────────────────────────────────────────────
         st.caption(f"🔒 {guide.get('disclaimer', 'This guide is for general wellness information only.')}")
 
     if st.session_state.guide_result:
         st.divider()
         display_guide(st.session_state.guide_result)
-
-
