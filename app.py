@@ -367,6 +367,13 @@ if st.session_state.page == "Symptom Checker":
         with col3:
             duration = st.text_input("Duration", placeholder="e.g. 2 days", max_chars=40)
 
+        location = st.text_input(
+            "📍 Your Location (optional)",
+            placeholder="e.g. Mumbai, India  or  New York, USA  or  London, UK",
+            help="Enter your city/country so the app can generate nearby hospital & doctor search links.",
+            max_chars=100,
+        )
+
         extra_context = st.text_area(
             "Additional context (optional)",
             placeholder="e.g. diabetic, currently on metformin, recently travelled abroad…",
@@ -413,7 +420,11 @@ if st.session_state.page == "Symptom Checker":
             ext = uploaded_image.name.rsplit(".", 1)[-1].lower()
             image_mime = mime_map.get(ext, "image/jpeg")
 
-        user_prompt = build_prompt(symptoms, age, gender, duration, extra_context, has_image=image_bytes is not None)
+        user_prompt = build_prompt(
+            symptoms, age, gender, duration, extra_context,
+            has_image=image_bytes is not None,
+            location=location,
+        )
 
         spinner_msg = (
             "🤖 Analysing symptoms + image with Gemini…"
@@ -423,6 +434,7 @@ if st.session_state.page == "Symptom Checker":
         with st.spinner(spinner_msg):
             try:
                 result = run_triage(api_key_input.strip(), user_prompt, image_bytes, image_mime)
+                result["_location"] = location.strip()   # stash location for display
                 st.session_state.result = result
                 label = symptoms[:80] + ("…" if len(symptoms) > 80 else "") if symptoms.strip() else f"[Image: {uploaded_image.name}]"
                 st.session_state.history.append({"symptoms": label, "result": result})
@@ -458,8 +470,8 @@ if st.session_state.page == "Symptom Checker":
             unsafe_allow_html=True,
         )
 
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["💊 Conditions", "✅ Recommended Actions", "⚠️ Warning Signs", "🩺 Get Help"]
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ["💊 Conditions", "✅ Recommended Actions", "⚠️ Warning Signs", "🏠 Home Remedies", "🩺 Get Help"]
         )
 
         with tab1:
@@ -500,9 +512,78 @@ if st.session_state.page == "Symptom Checker":
             else:
                 st.success("No immediate red-flag warning signs identified.")
 
+        # ── TAB 4 — HOME REMEDIES ────────────────────────────────────
         with tab4:
+            remedies = result.get("home_remedies", {})
+            if not remedies:
+                st.info("No home remedy information available for this result.")
+            else:
+                suitable = str(remedies.get("suitable", "true")).lower() != "false"
+                if not suitable:
+                    st.error(
+                        "🚨 **Home care is NOT recommended for this condition.** "
+                        "Please seek professional medical attention promptly.",
+                        icon="🏥",
+                    )
+                else:
+                    st.success("✅ Home care is appropriate alongside monitoring your symptoms.", icon="🏠")
+
+                steps = remedies.get("steps", [])
+                if steps:
+                    st.markdown("#### 🪄 Step-by-Step Home Care")
+                    for idx, s in enumerate(steps, 1):
+                        with st.expander(f"**Step {idx}: {s.get('step', '')}**", expanded=(idx == 1)):
+                            st.markdown(s.get("detail", ""))
+
+                col_eat, col_avoid = st.columns(2)
+                foods_eat   = remedies.get("foods_to_eat", [])
+                foods_avoid = remedies.get("foods_to_avoid", [])
+                with col_eat:
+                    if foods_eat:
+                        st.markdown("#### 🥗 Foods & Drinks to Have")
+                        for f in foods_eat:
+                            st.markdown(f"- ✅ {f}")
+                with col_avoid:
+                    if foods_avoid:
+                        st.markdown("#### 🚫 Foods & Drinks to Avoid")
+                        for f in foods_avoid:
+                            st.markdown(f"- ❌ {f}")
+
+                stop_msg = remedies.get("when_to_stop_home_care", "")
+                if stop_msg:
+                    st.divider()
+                    st.warning(f"🔔 **Stop home care and see a doctor if:** {stop_msg}")
+
+            st.divider()
+            st.caption("🔒 Home remedies are for informational purposes only and do not replace professional medical advice.")
+
+        # ── TAB 5 — GET HELP (doctors + nearby search) ──────────────
+        with tab5:
             st.markdown("### 🩺 Recommended Specialists & Doctors")
             st.caption("Based on your symptoms, these are the types of doctors you should consider consulting.")
+
+            # ── Nearby search links ───────────────────────────────────
+            user_loc = result.get("_location", "").strip()
+            location_query = user_loc if user_loc else "near me"
+            encoded_loc = location_query.replace(" ", "+")
+
+            st.markdown("#### 📍 Find Nearby Hospitals & Doctors")
+            search_cols = st.columns(3)
+            with search_cols[0]:
+                maps_url = f"https://www.google.com/maps/search/hospital+{encoded_loc}"
+                st.link_button("🏥 Hospitals Nearby", maps_url, use_container_width=True)
+            with search_cols[1]:
+                gp_url = f"https://www.google.com/maps/search/doctor+clinic+{encoded_loc}"
+                st.link_button("👨‍⚕️ Doctors / Clinics", gp_url, use_container_width=True)
+            with search_cols[2]:
+                er_url = f"https://www.google.com/maps/search/emergency+hospital+{encoded_loc}"
+                st.link_button("🚨 Emergency / A&E", er_url, use_container_width=True)
+
+            if user_loc:
+                st.caption(f"🌐 Showing results near **{user_loc}**")
+            else:
+                st.caption("💡 Enter your location in the form above for more precise nearby results.")
+
             st.divider()
 
             doctors_list = result.get("recommended_doctors", [])
@@ -514,6 +595,14 @@ if st.session_state.page == "Symptom Checker":
 
                     st.markdown(f"#### 👨‍⚕️ {specialty}")
                     st.info(f"**Why this specialist?** {why}")
+
+                    # Nearby search for this specialty
+                    spec_query = f"{specialty}+{encoded_loc}"
+                    st.link_button(
+                        f"🔍 Find {specialty} near {user_loc or 'me'}",
+                        f"https://www.google.com/maps/search/{spec_query}",
+                        use_container_width=False,
+                    )
 
                     for doc in example_doctors:
                         st.markdown(

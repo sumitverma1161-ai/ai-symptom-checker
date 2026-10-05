@@ -30,6 +30,18 @@ Response JSON schema (strictly follow this):
   ],
   "recommended_actions": ["<action 1>", "<action 2>", "..."],
   "warning_signs": ["<sign to watch for 1>", "..."],
+  "home_remedies": {
+    "suitable": "<true if home care is appropriate, false if professional care is urgently needed>",
+    "steps": [
+      {
+        "step": "<short remedy title, e.g. Rest & Hydration>",
+        "detail": "<2-3 sentence practical instruction a layperson can follow at home>"
+      }
+    ],
+    "foods_to_eat": ["<beneficial food or drink 1>", "<beneficial food or drink 2>"],
+    "foods_to_avoid": ["<food or drink to avoid 1>", "<food or drink to avoid 2>"],
+    "when_to_stop_home_care": "<1 sentence describing signs that mean home care is no longer sufficient>"
+  },
   "recommended_doctors": [
     {
       "specialty": "<medical specialty, e.g. Dermatologist, Cardiologist, General Practitioner>",
@@ -54,7 +66,8 @@ Triage level guidance:
 """
 
 
-def build_prompt(symptoms: str, age: str, gender: str, duration: str, extra_context: str, has_image: bool = False) -> str:
+def build_prompt(symptoms: str, age: str, gender: str, duration: str, extra_context: str,
+                 has_image: bool = False, location: str = "") -> str:
     """Construct the user-turn prompt from form inputs."""
     parts = []
     if symptoms.strip():
@@ -67,6 +80,8 @@ def build_prompt(symptoms: str, age: str, gender: str, duration: str, extra_cont
         parts.append(f"Duration of symptoms: {duration}")
     if extra_context.strip():
         parts.append(f"Additional context: {extra_context.strip()}")
+    if location.strip():
+        parts.append(f"Patient location: {location.strip()} (use this to make doctor/hospital search links relevant to their area)")
     if has_image:
         parts.append(
             "A medical image has been attached. Please carefully examine the image for any visible signs "
