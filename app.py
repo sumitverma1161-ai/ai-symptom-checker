@@ -1,7 +1,6 @@
 """
-app.py  —  AI-Powered Symptom Checker + Lifestyle Guide + Offline ML Diagnosis
-Streamlit front-end using Google Gemini 3.6 Flash (online) and local
-scikit-learn / PyTorch models (offline, no API key required).
+app.py  —  AI-Powered Symptom Checker + Lifestyle Guide
+Streamlit front-end using Google Gemini 3.6 Flash for triage recommendations.
 
 Run:
     streamlit run app.py
@@ -9,8 +8,6 @@ Run:
 
 import os
 import json
-import sys
-from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -24,17 +21,6 @@ from prompt_engine import (
     get_triage_meta,
     sort_conditions,
 )
-
-# ── Make ml_models importable regardless of working directory ────
-sys.path.insert(0, str(Path(__file__).parent))
-from ml_models.ml_engine import (
-    predict_from_text, predict_from_image, get_model_status,
-    _inject_kaggle_credentials, TextPredictor,
-)
-
-# ── On Streamlit Cloud, trigger auto-training at startup ──────────
-# Inject Kaggle creds from st.secrets before any predictor loads
-_inject_kaggle_credentials()
 
 # ─────────────────────────────────────────────────────────────────
 # Page configuration
@@ -103,21 +89,6 @@ st.markdown(
 hr {
     border-color: rgba(100, 190, 170, 0.3) !important;
 }
-
-/* ── ML confidence bar ── */
-.conf-bar-wrap {
-    background: #e9ecef;
-    border-radius: 6px;
-    height: 10px;
-    width: 100%;
-    overflow: hidden;
-    margin-top: 4px;
-}
-.conf-bar-fill {
-    height: 10px;
-    border-radius: 6px;
-    transition: width 0.4s ease;
-}
 </style>
 """,
     unsafe_allow_html=True,
@@ -131,16 +102,14 @@ load_dotenv()
 # ─────────────────────────────────────────────────────────────────
 # Session state initialisation
 # ─────────────────────────────────────────────────────────────────
-for key, default in [
-    ("history", []),
-    ("result", None),
-    ("guide_result", None),
-    ("page", "Symptom Checker"),
-    ("ml_text_result", None),
-    ("ml_image_result", None),
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "result" not in st.session_state:
+    st.session_state.result = None
+if "guide_result" not in st.session_state:
+    st.session_state.guide_result = None
+if "page" not in st.session_state:
+    st.session_state.page = "Symptom Checker"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -214,75 +183,11 @@ def run_lifestyle_guide(api_key: str, topic: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
-# ML result display helpers
-# ─────────────────────────────────────────────────────────────────
-
-def _conf_color(conf: float) -> str:
-    """Return a hex colour representing confidence level."""
-    if conf >= 0.6:
-        return "#28a745"
-    if conf >= 0.3:
-        return "#fd7e14"
-    return "#6c757d"
-
-
-def _render_prediction_card(rank: int, name: str, confidence: float, label_key: str = "disease"):
-    """Render a single prediction result card with confidence bar."""
-    pct = round(confidence * 100, 1)
-    color = _conf_color(confidence)
-    st.markdown(
-        f"""
-<div style="
-    border:1px solid #dee2e6;border-radius:10px;
-    padding:12px 16px;margin-bottom:10px;
-    background:rgba(255,255,255,0.8);
-">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
-            <span style="font-size:0.75rem;color:#6c757d;font-weight:600;">#{rank}</span>
-            &nbsp;
-            <strong style="font-size:1rem;color:#1f2328;">{name}</strong>
-        </div>
-        <span style="
-            background:{color};color:#fff;
-            border-radius:12px;padding:2px 10px;
-            font-size:0.82rem;font-weight:700;
-        ">{pct}%</span>
-    </div>
-    <div class="conf-bar-wrap" style="margin-top:8px;">
-        <div class="conf-bar-fill" style="width:{pct}%;background:{color};"></div>
-    </div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-
-def _render_model_info(model_info: dict, source_label: str):
-    """Render a small model provenance badge."""
-    if not model_info:
-        return
-    acc = model_info.get("accuracy", "N/A")
-    mtype = model_info.get("type", "ML Model")
-    n_cls = model_info.get("num_classes", "?")
-    st.caption(
-        f"🤖 **{source_label}** · {mtype} · {n_cls} classes · "
-        f"accuracy: **{acc if isinstance(acc, str) else f'{acc*100:.1f}%'}**"
-    )
-
-
-def _render_model_status_badge(ready: bool, label: str):
-    if ready:
-        st.sidebar.success(f"✅ {label} loaded")
-    else:
-        st.sidebar.warning(f"⚠️ {label} not trained yet")
-
-
-# ─────────────────────────────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🩺 AI Health Assistant")
+    st.caption("Powered by **Gemini 3.6 Flash**")
     st.divider()
 
     env_key = os.getenv("GEMINI_API_KEY", "")
@@ -291,61 +196,8 @@ with st.sidebar:
         value=env_key,
         type="password",
         placeholder="Paste your API key here…",
-        help="Required only for AI Symptom Checker & Lifestyle Guide pages. Not needed for offline ML Diagnosis.",
+        help="Get a free key at https://aistudio.google.com/app/apikey",
     )
-
-    st.divider()
-
-    # ── Offline ML model status ────────────────────────────────
-    st.markdown("**🧠 Offline ML Models**")
-    status = get_model_status()
-    text_ready = status["text_model"]["ready"]
-    text_error = status["text_model"].get("error", "")
-
-    _render_model_status_badge(text_ready, "Text Disease Model")
-    _render_model_status_badge(status["image_model"]["ready"], "Image Classifier")
-
-    # Show auto-training status if model isn't ready yet
-    if not text_ready and text_error:
-        if "KAGGLE_USERNAME" in text_error or "Auto-training failed" in text_error:
-            st.sidebar.error(
-                "⚙️ **Text model needs Kaggle credentials.**\n\n"
-                "Add to **App Settings → Secrets**:\n"
-                "```toml\n"
-                "KAGGLE_USERNAME = \"your_username\"\n"
-                "KAGGLE_KEY = \"your_api_key\"\n"
-                "```\n"
-                "Then reboot the app — it will train automatically.",
-                icon="🔑",
-            )
-        else:
-            st.sidebar.info("⏳ Text model will train on first use (needs Kaggle key).")
-
-    with st.expander("ℹ️ Training Instructions", expanded=False):
-        st.markdown(
-            """
-**☁️ Streamlit Cloud (automatic):**
-1. Go to App Settings → Secrets and add:
-```toml
-KAGGLE_USERNAME = "your_username"
-KAGGLE_KEY = "your_api_key"
-```
-2. Reboot the app — model trains automatically on first load.
-
-**💻 Local (manual):**
-1. Download [Training.csv from Kaggle](https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning)
-2. Place it in `ml_models/data/`
-3. Run: `python ml_models/train_text_model.py`
-
-**Image Model (Skin / Medical Imaging):**
-1. Download images from one or more of:
-   - [Google SCIN](https://github.com/google-research-datasets/scin)
-   - [TCIA](https://www.cancerimagingarchive.net/)
-   - [MedImg](https://www.cuilab.cn/medimg/)
-2. Organise as `ml_models/data/images/<dataset>/<label>/<image>.jpg`
-3. Run: `python ml_models/train_image_model.py`
-"""
-        )
 
     st.divider()
     st.caption(
@@ -361,7 +213,7 @@ KAGGLE_KEY = "your_api_key"
 
 
 # ═══════════════════════════════════════════════════════════════════
-# RIGHT-PANEL HEADER — App title left, Nav right
+# RIGHT-PANEL HEADER — App title left, Nav + Triage right
 # ═══════════════════════════════════════════════════════════════════
 hdr_left, hdr_right = st.columns([1.1, 1], gap="large")
 
@@ -374,7 +226,7 @@ with hdr_left:
         AI Health Assistant
     </h1>
     <p style="color:#4a7a8a;font-size:0.95rem;margin:0;">
-        Gemini 3.6 Flash · Offline ML · Image Analysis
+        Powered by <strong>Gemini 3.6 Flash</strong>
     </p>
 </div>
 """,
@@ -398,7 +250,7 @@ with hdr_right:
 """,
         unsafe_allow_html=True,
     )
-    nav_b1, nav_b2, nav_b3 = st.columns(3)
+    nav_b1, nav_b2 = st.columns(2)
     with nav_b1:
         if st.button(
             "🩺 Symptom\nChecker",
@@ -410,15 +262,6 @@ with hdr_right:
             st.rerun()
     with nav_b2:
         if st.button(
-            "🧠 ML\nDiagnosis",
-            use_container_width=True,
-            type="primary" if st.session_state.page == "ML Diagnosis" else "secondary",
-            key="nav_ml",
-        ):
-            st.session_state.page = "ML Diagnosis"
-            st.rerun()
-    with nav_b3:
-        if st.button(
             "📖 Lifestyle\nGuide",
             use_container_width=True,
             type="primary" if st.session_state.page == "Lifestyle Guide" else "secondary",
@@ -427,7 +270,7 @@ with hdr_right:
             st.session_state.page = "Lifestyle Guide"
             st.rerun()
 
-    # ── Triage legend (only on Symptom Checker page) ─────────
+    # ── Triage legend stacked vertically on the right ────
     if st.session_state.page == "Symptom Checker":
         st.markdown(
             """
@@ -481,7 +324,7 @@ with hdr_right:
 st.divider()
 
 # ═══════════════════════════════════════════════════════════════════
-# PAGE 1 — SYMPTOM CHECKER  (Gemini AI)
+# PAGE 1 — SYMPTOM CHECKER
 # ═══════════════════════════════════════════════════════════════════
 if st.session_state.page == "Symptom Checker":
 
@@ -672,248 +515,7 @@ if st.session_state.page == "Symptom Checker":
 
 
 # ═══════════════════════════════════════════════════════════════════
-# PAGE 2 — OFFLINE ML DIAGNOSIS
-# ═══════════════════════════════════════════════════════════════════
-elif st.session_state.page == "ML Diagnosis":
-
-    st.markdown(
-        """
-## 🧠 Offline ML Medical Diagnosis
-> Predict likely conditions from **typed symptoms** or an **uploaded medical image** — 
-> 100% offline, no API key needed. Powered by locally trained scikit-learn and PyTorch models.
-"""
-    )
-
-    # ── Dataset provenance notice ──────────────────────────────
-    with st.expander("📚 Dataset Sources & Citations", expanded=False):
-        st.markdown(
-            """
-| Model | Dataset | Source |
-|-------|---------|--------|
-| Text Disease Classifier | Disease Prediction Using ML | [Kaggle — kaushil268](https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning) |
-| Text Disease Classifier | Heart Disease Dataset | [UCI ML Repository](https://archive.ics.uci.edu/dataset/45/heart+disease) |
-| Text Disease Classifier | Pima Indians Diabetes | [UCI ML Repository](https://archive.ics.uci.edu/dataset/34/diabetes) |
-| Image Classifier | Skin Condition Image Network | [Google SCIN](https://github.com/google-research-datasets/scin) |
-| Image Classifier | Medical Imaging Collections | [The Cancer Imaging Archive](https://www.cancerimagingarchive.net/) |
-| Image Classifier | MedImg Dataset | [CUI Lab / MedImg](https://www.cuilab.cn/medimg/) |
-
-> Models are auto-downloaded and trained on Streamlit Cloud if Kaggle credentials are set in Secrets.
-"""
-        )
-
-    st.divider()
-
-    # ── Auto-train spinner (shown only while training on first load) ──
-    _ts = get_model_status()["text_model"]
-    if not _ts["ready"] and not _ts.get("error"):
-        with st.spinner("⏳ Training ML model from Kaggle dataset… this takes ~2 minutes on first load."):
-            TextPredictor.get()   # blocks until training completes
-        st.rerun()
-
-    # ════════════════════════════════════════════════════════════
-    # TAB A — Text Symptom Prediction
-    # TAB B — Image-Based Prediction
-    # ════════════════════════════════════════════════════════════
-    tab_text, tab_image = st.tabs(["📝 Text Symptom Analysis", "🖼️ Image-Based Diagnosis"])
-
-    # ── TAB A: Text ─────────────────────────────────────────────
-    with tab_text:
-        st.markdown(
-            "Enter your symptoms in plain English. The model will match them against "
-            "**132 known symptom indicators** trained on the Kaggle disease dataset."
-        )
-
-        text_status = get_model_status()["text_model"]
-        if not text_status["ready"]:
-            err = text_status.get("error", "")
-            if "KAGGLE_USERNAME" in err or "Auto-training failed" in err or "kagglehub" in err:
-                st.error(
-                    "🔑 **Kaggle credentials required for auto-training.**\n\n"
-                    "Go to **App Settings → Secrets** and add:\n"
-                    "```toml\n"
-                    "KAGGLE_USERNAME = \"your_username\"\n"
-                    "KAGGLE_KEY = \"your_api_key\"\n"
-                    "```\n"
-                    "Then reboot — the model will train automatically (~2 min).",
-                )
-            else:
-                st.warning(f"⚠️ Text model not loaded.\n\n```\n{err}\n```", icon="🚧")
-        else:
-            trained_rt = text_status["meta"].get("trained_at_runtime", False)
-            st.success(
-                f"✅ Model ready — {text_status['meta'].get('num_classes', '?')} diseases · "
-                f"accuracy {text_status['meta'].get('test_accuracy', 'N/A')}"
-                + (" · *(trained at runtime)*" if trained_rt else ""),
-                icon="🤖",
-            )
-
-        with st.form("ml_text_form", clear_on_submit=False):
-            ml_symptoms = st.text_area(
-                "Describe your symptoms *",
-                placeholder=(
-                    "e.g. I have a high fever, itching all over, and fatigue for the past 3 days. "
-                    "Also experiencing loss of appetite and mild joint pain."
-                ),
-                height=140,
-                help="Use natural language — the model recognises symptom keywords automatically.",
-            )
-            top_n_text = st.slider("Number of predictions to show", min_value=1, max_value=10, value=5)
-            ml_text_submitted = st.form_submit_button(
-                "🔬 Predict Disease", use_container_width=True, type="primary"
-            )
-
-        if ml_text_submitted:
-            if not ml_symptoms.strip():
-                st.error("📝 Please enter your symptoms.")
-                st.stop()
-            with st.spinner("🧠 Running offline ML inference…"):
-                st.session_state.ml_text_result = predict_from_text(ml_symptoms.strip(), top_n=top_n_text)
-
-        # ── Display text prediction result ─────────────────────
-        if st.session_state.ml_text_result:
-            res = st.session_state.ml_text_result
-
-            if "error" in res and not res.get("predictions"):
-                st.error(f"❌ {res['error']}")
-            else:
-                st.divider()
-                st.subheader("🔬 ML Prediction Results")
-
-                # Matched symptoms summary
-                matched = res.get("matched_symptoms", [])
-                n_matched = res.get("num_symptoms_matched", 0)
-                if matched:
-                    st.info(
-                        f"🎯 **{n_matched} symptom(s) matched:** "
-                        + " · ".join(f"`{s}`" for s in matched)
-                    )
-                else:
-                    st.warning(
-                        "⚠️ No specific symptom keywords were matched in your text. "
-                        "Try using more specific medical terms (e.g. 'high fever', 'joint pain', 'itching')."
-                    )
-
-                predictions = res.get("predictions", [])
-                if predictions:
-                    st.markdown("#### Top Predicted Conditions")
-                    for pred in predictions:
-                        _render_prediction_card(
-                            pred["rank"], pred["disease"], pred["confidence"], label_key="disease"
-                        )
-                    _render_model_info(res.get("model_info", {}), "Text Disease Classifier")
-                else:
-                    st.info("No predictions available. Try adding more descriptive symptoms.")
-
-                st.divider()
-                st.caption(
-                    "⚠️ These predictions are generated by a locally trained machine learning model "
-                    "and are for informational purposes only. They do not constitute medical advice. "
-                    "Always consult a qualified healthcare professional for diagnosis."
-                )
-
-    # ── TAB B: Image ─────────────────────────────────────────────
-    with tab_image:
-        st.markdown(
-            "Upload a medical or skin condition image. The MobileNetV2 model — "
-            "trained on Google SCIN, TCIA, and MedImg — will classify it offline."
-        )
-
-        image_status = get_model_status()["image_model"]
-        if not image_status["ready"]:
-            st.warning(
-                f"⚠️ Image model not loaded.\n\n```\n{image_status['error']}\n```",
-                icon="🚧",
-            )
-        else:
-            st.success(
-                f"✅ Model ready — {image_status['meta'].get('num_classes', '?')} classes, "
-                f"val. accuracy {image_status['meta'].get('best_val_accuracy', 'N/A')}",
-                icon="🤖",
-            )
-
-        # ── File uploader ──────────────────────────────────────
-        uploaded_file = st.file_uploader(
-            "Upload a medical image",
-            type=["jpg", "jpeg", "png", "bmp", "webp", "tiff"],
-            help=(
-                "Accepted formats: JPEG, PNG, BMP, WebP, TIFF. "
-                "For best results use clear, well-lit images of skin conditions or medical scans. "
-                "Images are processed locally and never sent to external servers."
-            ),
-            key="ml_image_uploader",
-        )
-
-        col_img, col_ctrl = st.columns([1, 1], gap="medium")
-
-        with col_img:
-            if uploaded_file is not None:
-                st.image(
-                    uploaded_file,
-                    caption=f"📷 {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)",
-                    use_container_width=True,
-                )
-
-        with col_ctrl:
-            if uploaded_file is not None:
-                top_n_img = st.slider(
-                    "Number of predictions", min_value=1, max_value=10, value=5, key="top_n_img"
-                )
-                st.markdown("")  # spacer
-                if st.button(
-                    "🔬 Classify Image",
-                    use_container_width=True,
-                    type="primary",
-                    key="classify_btn",
-                ):
-                    with st.spinner("🧠 Running image classification…"):
-                        img_bytes = uploaded_file.read()
-                        st.session_state.ml_image_result = predict_from_image(
-                            img_bytes, top_n=top_n_img
-                        )
-
-        # ── Display image prediction result ───────────────────
-        if st.session_state.ml_image_result:
-            img_res = st.session_state.ml_image_result
-
-            if "error" in img_res and not img_res.get("predictions"):
-                st.error(f"❌ {img_res['error']}")
-            else:
-                st.divider()
-                st.subheader("🔬 Image Classification Results")
-
-                predictions = img_res.get("predictions", [])
-                if predictions:
-                    for pred in predictions:
-                        _render_prediction_card(
-                            pred["rank"], pred["condition"], pred["confidence"], label_key="condition"
-                        )
-                    _render_model_info(img_res.get("model_info", {}), "MobileNetV2 Image Classifier")
-
-                    # Dataset sources for the image model
-                    datasets_used = img_res.get("model_info", {}).get("datasets", [])
-                    if datasets_used:
-                        with st.expander("📚 Training Datasets Used for This Model"):
-                            for ds in datasets_used:
-                                st.markdown(f"- **{ds['name']}** — [{ds['url']}]({ds['url']})")
-                else:
-                    st.info("No predictions returned. The model may need re-training on more data.")
-
-                st.divider()
-                st.caption(
-                    "⚠️ Image classification results are generated by a locally trained model "
-                    "and are for informational/research purposes only. "
-                    "They are not a substitute for professional medical imaging analysis or diagnosis."
-                )
-        elif uploaded_file is None:
-            st.info(
-                "👆 Upload an image above to get started. "
-                "Supported types: skin conditions, dermatology photos, or any medical image "
-                "from the supported dataset categories."
-            )
-
-
-# ═══════════════════════════════════════════════════════════════════
-# PAGE 3 — LIFESTYLE GUIDE
+# PAGE 2 — LIFESTYLE GUIDE
 # ═══════════════════════════════════════════════════════════════════
 elif st.session_state.page == "Lifestyle Guide":
 

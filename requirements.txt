@@ -1,24 +1,3 @@
-
-# ── Core web framework ─────────────────────────────────────────────────
 streamlit>=1.35.0
-python-dotenv>=1.0.0
-
-# ── Google Gemini (online AI pages) ───────────────────────────────────
 google-genai>=0.3.0
-
-# ── Kaggle dataset auto-download ──────────────────────────────────────
-kagglehub>=0.3.0
-
-# ── Offline ML — text disease classifier ──────────────────────────────
-scikit-learn>=1.4.0
-numpy>=1.26.0
-pandas>=2.2.0
-joblib>=1.3.0
-
-# ── Offline ML — image classifier (MobileNetV2) ───────────────────────
-torch>=2.2.0
-torchvision>=0.17.0
-Pillow>=10.3.0
-
-# ── Optional: DICOM support (for TCIA datasets) ───────────────────────
-# pydicom>=2.4.0
+python-dotenv>=1.0.0
