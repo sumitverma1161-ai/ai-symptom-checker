@@ -1,6 +1,6 @@
 """
 app.py  —  AI-Powered Symptom Checker + Lifestyle Guide
-Streamlit front-end using Google Gemini 3.6 Flash for triage recommendations.
+Streamlit front-end using Google Gemini 2.5 Flash for triage recommendations.
 
 Run:
     streamlit run app.py
@@ -131,7 +131,7 @@ def run_triage(api_key: str, user_prompt: str, image_bytes: bytes | None = None,
         contents = user_prompt
 
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
@@ -183,7 +183,7 @@ def run_lifestyle_guide(api_key: str, topic: str) -> dict:
     """Generate a lifestyle guide for the given health topic."""
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model="gemini-2.5-flash",
         contents=f"Generate a comprehensive lifestyle guide on: {topic}",
         config=types.GenerateContentConfig(
             system_instruction=LIFESTYLE_SYSTEM,
@@ -199,7 +199,7 @@ def run_lifestyle_guide(api_key: str, topic: str) -> dict:
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🩺 AI Health Assistant")
-    st.caption("Powered by **Gemini 3.6 Flash**")
+    st.caption("Powered by **Gemini 2.5 Flash**")
     st.divider()
 
     env_key = os.getenv("GEMINI_API_KEY", "")
@@ -238,7 +238,7 @@ with hdr_left:
         AI Health Assistant
     </h1>
     <p style="color:#4a7a8a;font-size:0.95rem;margin:0;">
-        Powered by <strong>Gemini 3.6 Flash</strong>
+        Powered by <strong>Gemini 2.5 Flash</strong>
     </p>
 </div>
 """,
