@@ -6,6 +6,9 @@ python-dotenv>=1.0.0
 # ── Google Gemini (online AI pages) ───────────────────────────────────
 google-genai>=0.3.0
 
+# ── Kaggle dataset auto-download ──────────────────────────────────────
+kagglehub>=0.3.0
+
 # ── Offline ML — text disease classifier ──────────────────────────────
 scikit-learn>=1.4.0
 numpy>=1.26.0

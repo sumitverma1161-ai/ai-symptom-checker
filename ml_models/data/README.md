@@ -1,27 +1,39 @@
-# ml_models/data — Dataset Placement Guide
+# ml_models/data — Dataset Guide
 
-This directory holds the raw datasets used to train the offline ML models.
-**Do not commit large dataset files to git** — add them locally before training.
+This directory is used as a local cache for datasets.
+**Do not commit large dataset files to git.**
 
 ---
 
-## Text Model Datasets
+## Text Model Dataset — Auto-downloaded via kagglehub ✅
 
-### 1. Kaggle Disease Prediction (Primary — Required)
-- **URL:** https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning  
-- **Files to download:** `Training.csv`, `Testing.csv`  
-- **Place at:** `ml_models/data/Training.csv` and `ml_models/data/Testing.csv`  
-- **Description:** 4920 samples, 132 symptom binary features, 41 disease classes.
+The training script uses **kagglehub** to download the dataset automatically.
+No manual CSV placement is needed.
 
-### 2. UCI Heart Disease (Optional)
-- **URL:** https://archive.ics.uci.edu/dataset/45/heart+disease  
-- **File:** `processed.cleveland.data` → rename to `heart.csv`  
-- **Place at:** `ml_models/data/heart.csv`
+```python
+import kagglehub
 
-### 3. UCI Pima Indians Diabetes (Optional)
-- **URL:** https://archive.ics.uci.edu/dataset/34/diabetes  
-- **File:** `diabetes.csv`  
-- **Place at:** `ml_models/data/diabetes.csv`
+# Downloads and caches the dataset locally
+path = kagglehub.dataset_download("kaushil268/disease-prediction-using-machine-learning")
+print("Path to dataset files:", path)
+```
+
+**Dataset:** https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning
+**Description:** 4920 samples · 132 symptom binary features · 41 disease classes
+
+### One-time Kaggle authentication
+
+kagglehub needs your Kaggle credentials the first time:
+
+**Option A — `kaggle.json` file (recommended):**
+1. Go to https://www.kaggle.com/settings → API → **Create New Token**
+2. Save the downloaded `kaggle.json` to `~/.kaggle/kaggle.json`
+
+**Option B — Environment variables:**
+```bash
+set KAGGLE_USERNAME=your_username
+set KAGGLE_KEY=your_api_key
+```
 
 ---
 

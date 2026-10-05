@@ -2,42 +2,42 @@
 train_text_model.py
 --------------------
 Trains a Random Forest + Gradient Boosting ensemble classifier on the
-Kaggle "Disease Prediction Using Machine Learning" dataset and the
-UCI ML Repository Heart Disease / Diabetes datasets.
+Kaggle "Disease Prediction Using Machine Learning" dataset.
 
-Dataset sources (download manually and place in ml_models/data/):
-  - Kaggle: https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning
-      → Training.csv   (133 symptom columns + prognosis label)
-      → Testing.csv
-  - UCI Heart Disease: https://archive.ics.uci.edu/dataset/45/heart+disease
-      → heart.csv  (processed.cleveland.data renamed to heart.csv)
-  - UCI Diabetes (Pima Indians): https://archive.ics.uci.edu/dataset/34/diabetes
-      → diabetes.csv
+The dataset is downloaded automatically via kagglehub — no manual
+CSV placement required. kagglehub caches downloads locally so
+subsequent runs are instant.
+
+  Dataset: https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning
 
 Usage:
     python ml_models/train_text_model.py
 
+Requirements:
+    pip install kagglehub
+    # Authenticate once: kaggle.json in ~/.kaggle/ OR set env vars:
+    #   KAGGLE_USERNAME=<your_username>
+    #   KAGGLE_KEY=<your_api_key>
+
 Outputs:
-    ml_models/text_model.pkl       — trained scikit-learn Pipeline
-    ml_models/symptom_columns.pkl  — ordered feature column names
-    ml_models/label_encoder.pkl    — LabelEncoder for disease names
-    ml_models/model_meta.json      — accuracy & dataset info
+    ml_models/text_model.pkl          — trained VotingClassifier (RF + GB)
+    ml_models/symptom_columns.pkl     — ordered feature column names
+    ml_models/label_encoder.pkl       — LabelEncoder for disease names
+    ml_models/symptom_keyword_map.pkl — natural-language → column mapping
+    ml_models/model_meta.json         — accuracy & dataset info
 """
 
 import os
 import json
-import pickle
 import warnings
 from pathlib import Path
 
+import kagglehub
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.pipeline import Pipeline
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.multiclass import OneVsRestClassifier
 from sklearn.metrics import classification_report, accuracy_score
 import joblib
 
@@ -47,30 +47,45 @@ DATA_DIR = Path(__file__).parent / "data"
 OUT_DIR = Path(__file__).parent
 
 # ─────────────────────────────────────────────────────────────────
-# 1.  Load Kaggle disease-prediction dataset (primary — 133 symptoms)
+# 1.  Download & load Kaggle disease-prediction dataset via kagglehub
 # ─────────────────────────────────────────────────────────────────
 
 def load_kaggle_dataset():
-    train_path = DATA_DIR / "Training.csv"
-    test_path = DATA_DIR / "Testing.csv"
+    """
+    Downloads the dataset with kagglehub (cached after first run) and
+    returns a combined DataFrame plus the label column name.
+    """
+    print("[kagglehub] Downloading dataset kaushil268/disease-prediction-using-machine-learning …")
+    dataset_path = kagglehub.dataset_download("kaushil268/disease-prediction-using-machine-learning")
+    print(f"[kagglehub] Path to dataset files: {dataset_path}")
 
-    if not train_path.exists():
-        raise FileNotFoundError(
-            f"Training.csv not found at {train_path}.\n"
-            "Download from: https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning\n"
-            "and place Training.csv and Testing.csv in ml_models/data/"
-        )
+    dataset_path = Path(dataset_path)
+
+    # Locate Training.csv / Testing.csv inside the downloaded folder
+    train_path = _find_csv(dataset_path, "Training")
+    test_path  = _find_csv(dataset_path, "Testing")
 
     train_df = pd.read_csv(train_path)
-    test_df = pd.read_csv(test_path)
+    test_df  = pd.read_csv(test_path)
 
-    # Drop unnamed last column if present
+    # Drop any unnamed trailing columns
     train_df = train_df.loc[:, ~train_df.columns.str.contains("^Unnamed")]
-    test_df = test_df.loc[:, ~test_df.columns.str.contains("^Unnamed")]
+    test_df  = test_df.loc[:,  ~test_df.columns.str.contains("^Unnamed")]
 
     df = pd.concat([train_df, test_df], ignore_index=True)
-    print(f"[Kaggle dataset] Loaded {len(df)} samples, {df.shape[1]-1} symptom features")
+    print(f"[dataset] Loaded {len(df)} samples, {df.shape[1]-1} symptom features")
     return df, "prognosis"
+
+
+def _find_csv(base: Path, stem_prefix: str) -> Path:
+    """Recursively find the first CSV whose stem starts with stem_prefix."""
+    matches = sorted(base.rglob(f"{stem_prefix}*.csv"))
+    if not matches:
+        raise FileNotFoundError(
+            f"Could not find '{stem_prefix}*.csv' inside {base}.\n"
+            "Make sure the kagglehub download completed successfully."
+        )
+    return matches[0]
 
 
 # ─────────────────────────────────────────────────────────────────

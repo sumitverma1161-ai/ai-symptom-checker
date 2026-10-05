@@ -299,9 +299,10 @@ with st.sidebar:
         st.markdown(
             """
 **Text Model (Disease Prediction):**
-1. Download [Training.csv from Kaggle](https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning)
-2. Place it in `ml_models/data/`
-3. Run: `python ml_models/train_text_model.py`
+1. Add your Kaggle API key → save `kaggle.json` to `~/.kaggle/`
+   *(get it at [kaggle.com/settings](https://www.kaggle.com/settings) → API → Create New Token)*
+2. Run: `python ml_models/train_text_model.py`
+   *(dataset downloads automatically via kagglehub)*
 
 **Image Model (Skin / Medical Imaging):**
 1. Download images from one or more of:
