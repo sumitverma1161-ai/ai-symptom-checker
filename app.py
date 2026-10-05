@@ -1,6 +1,6 @@
 """
 app.py  —  AI-Powered Symptom Checker + Lifestyle Guide
-Streamlit front-end using Google Gemini 3.8 Flash for triage recommendations.
+Dual-provider AI backend: Google Gemini 3.8 Flash  OR  Groq (LLaMA 3).
 
 Run:
     streamlit run app.py
@@ -11,8 +11,6 @@ import json
 
 import streamlit as st
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 from prompt_engine import (
     SYSTEM_INSTRUCTION,
@@ -20,6 +18,16 @@ from prompt_engine import (
     parse_response,
     get_triage_meta,
     sort_conditions,
+)
+from ai_providers import (
+    call_triage,
+    call_lifestyle,
+    ProviderError,
+    PROVIDER_GEMINI,
+    PROVIDER_GROQ,
+    GROQ_MODELS,
+    GROQ_MODEL_LARGE,
+    GEMINI_MODEL,
 )
 
 # ─────────────────────────────────────────────────────────────────
@@ -102,46 +110,22 @@ load_dotenv()
 # ─────────────────────────────────────────────────────────────────
 # Session state initialisation
 # ─────────────────────────────────────────────────────────────────
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "result" not in st.session_state:
-    st.session_state.result = None
-if "guide_result" not in st.session_state:
-    st.session_state.guide_result = None
-if "page" not in st.session_state:
-    st.session_state.page = "Symptom Checker"
+for _k, _v in [
+    ("history",       []),
+    ("result",        None),
+    ("guide_result",  None),
+    ("page",          "Symptom Checker"),
+    ("provider",      PROVIDER_GEMINI),
+    ("groq_model",    GROQ_MODEL_LARGE),
+    ("auto_fallback", True),
+]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
 
 # ─────────────────────────────────────────────────────────────────
-# Gemini helpers
+# Lifestyle system prompt
 # ─────────────────────────────────────────────────────────────────
-def run_triage(api_key: str, user_prompt: str, image_bytes: bytes | None = None, image_mime: str = "image/jpeg") -> dict:
-    """
-    Send the symptom prompt to Gemini and return parsed JSON result.
-    If image_bytes is provided, sends a multimodal request (text + image).
-    """
-    client = genai.Client(api_key=api_key)
-
-    if image_bytes:
-        contents = [
-            types.Part.from_bytes(data=image_bytes, mime_type=image_mime),
-            user_prompt,
-        ]
-    else:
-        contents = user_prompt
-
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.2,
-            max_output_tokens=2048,
-        ),
-    )
-    return parse_response(response.text)
-
-
 LIFESTYLE_SYSTEM = """You are a medical wellness expert specialising in preventive health and lifestyle medicine.
 Generate a comprehensive, practical lifestyle guide based on the health topic provided by the user.
 
@@ -179,37 +163,98 @@ Response JSON schema (strictly follow this):
 """
 
 
-def run_lifestyle_guide(api_key: str, topic: str) -> dict:
-    """Generate a lifestyle guide for the given health topic."""
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=f"Generate a comprehensive lifestyle guide on: {topic}",
-        config=types.GenerateContentConfig(
-            system_instruction=LIFESTYLE_SYSTEM,
-            temperature=0.4,
-            max_output_tokens=4096,
-        ),
-    )
-    return parse_response(response.text)
+# ─────────────────────────────────────────────────────────────────
+# Provider status badge helper
+# ─────────────────────────────────────────────────────────────────
+_PROVIDER_ICONS = {PROVIDER_GEMINI: "✨", PROVIDER_GROQ: "⚡"}
+
+def _provider_badge(provider: str, used_fallback: bool = False) -> str:
+    icon = _PROVIDER_ICONS.get(provider, "🤖")
+    suffix = " *(fallback)*" if used_fallback else ""
+    return f"{icon} **{provider}**{suffix}"
 
 
 # ─────────────────────────────────────────────────────────────────
-# Sidebar
+# Sidebar — Admin / Settings panel
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🩺 AI Health Assistant")
-    st.caption("Powered by **Gemini 3.8 Flash**")
     st.divider()
 
-    env_key = os.getenv("GEMINI_API_KEY", "")
-    api_key_input = st.text_input(
-        "Google Gemini API Key",
-        value=env_key,
-        type="password",
-        placeholder="Paste your API key here…",
-        help="Get a free key at https://aistudio.google.com/app/apikey",
-    )
+    # ── ⚙️ AI Settings expander ──────────────────────────────────
+    with st.expander("⚙️ AI Settings", expanded=True):
+
+        st.markdown("##### 🔑 API Keys")
+
+        gemini_env = os.getenv("GEMINI_API_KEY", "")
+        gemini_key = st.text_input(
+            "Google Gemini API Key",
+            value=gemini_env,
+            type="password",
+            placeholder="AIza…",
+            help="Get a free key at https://aistudio.google.com/app/apikey",
+        )
+
+        groq_env = os.getenv("GROQ_API_KEY", "")
+        groq_key = st.text_input(
+            "Groq API Key",
+            value=groq_env,
+            type="password",
+            placeholder="gsk_…",
+            help="Get a free key at https://console.groq.com/keys",
+        )
+
+        st.markdown("##### 🤖 Active Provider")
+        provider = st.radio(
+            "Select AI provider",
+            options=[PROVIDER_GEMINI, PROVIDER_GROQ],
+            index=0 if st.session_state.provider == PROVIDER_GEMINI else 1,
+            format_func=lambda p: f"{'✨' if p == PROVIDER_GEMINI else '⚡'} {p}",
+            help=(
+                f"**{PROVIDER_GEMINI}**: {GEMINI_MODEL} — multimodal, supports image upload.\n\n"
+                f"**{PROVIDER_GROQ}**: LLaMA 3 — ultra-fast text inference. Images are ignored."
+            ),
+            label_visibility="collapsed",
+        )
+        st.session_state.provider = provider
+
+        # Groq sub-options (only shown when Groq is selected)
+        if provider == PROVIDER_GROQ:
+            groq_model = st.selectbox(
+                "Groq Model",
+                options=GROQ_MODELS,
+                index=GROQ_MODELS.index(st.session_state.groq_model)
+                      if st.session_state.groq_model in GROQ_MODELS else 0,
+                help="llama3-70b-8192 = higher quality · llama3-8b-8192 = faster",
+            )
+            st.session_state.groq_model = groq_model
+        else:
+            groq_model = st.session_state.groq_model
+
+        # Active model display
+        active_model = GEMINI_MODEL if provider == PROVIDER_GEMINI else groq_model
+        st.caption(f"🎯 Model: `{active_model}`")
+
+        # Key validation badges
+        k_col1, k_col2 = st.columns(2)
+        with k_col1:
+            if gemini_key:
+                st.success("Gemini ✅", icon="✨")
+            else:
+                st.warning("Gemini —", icon="✨")
+        with k_col2:
+            if groq_key:
+                st.success("Groq ✅", icon="⚡")
+            else:
+                st.warning("Groq —", icon="⚡")
+
+        st.markdown("##### 🔄 Fallback")
+        auto_fallback = st.toggle(
+            "Auto-fallback to other provider on error",
+            value=st.session_state.auto_fallback,
+            help="If the active provider fails (e.g. 503 overload), automatically retry with the other provider.",
+        )
+        st.session_state.auto_fallback = auto_fallback
 
     st.divider()
     st.caption(
@@ -238,7 +283,7 @@ with hdr_left:
         AI Health Assistant
     </h1>
     <p style="color:#4a7a8a;font-size:0.95rem;margin:0;">
-        Powered by <strong>Gemini 3.8 Flash</strong>
+        Gemini 3.8 Flash &amp; Groq LLaMA 3 — switchable
     </p>
 </div>
 """,
@@ -404,45 +449,70 @@ if st.session_state.page == "Symptom Checker":
         )
 
     if submitted:
-        if not api_key_input.strip():
-            st.error("🔑 Please enter your Gemini API key in the sidebar.")
+        # ── Validate: at least one key for the active provider ───
+        active_key = gemini_key if provider == PROVIDER_GEMINI else groq_key
+        if not active_key.strip():
+            other = PROVIDER_GROQ if provider == PROVIDER_GEMINI else PROVIDER_GEMINI
+            st.error(
+                f"🔑 No API key for **{provider}**. "
+                f"Enter it in the ⚙️ AI Settings panel, or switch to **{other}**."
+            )
             st.stop()
         if not symptoms.strip() and uploaded_image is None:
             st.error("📝 Please describe your symptoms or upload an image before submitting.")
             st.stop()
 
-        # Read image bytes + MIME type if provided
+        # ── Image bytes ──────────────────────────────────────────
         image_bytes = None
-        image_mime = "image/jpeg"
+        image_mime  = "image/jpeg"
         if uploaded_image is not None:
             image_bytes = uploaded_image.read()
             mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
             ext = uploaded_image.name.rsplit(".", 1)[-1].lower()
             image_mime = mime_map.get(ext, "image/jpeg")
+            if provider == PROVIDER_GROQ and image_bytes:
+                st.warning("⚡ Groq (LLaMA 3) does not support image input. The image will be ignored — switch to Gemini for image analysis.", icon="⚠️")
 
         user_prompt = build_prompt(
             symptoms, age, gender, duration, extra_context,
-            has_image=image_bytes is not None,
+            has_image=image_bytes is not None and provider == PROVIDER_GEMINI,
             location=location,
         )
 
-        spinner_msg = (
-            "🤖 Analysing symptoms + image with Gemini…"
-            if image_bytes else
-            "🤖 Analysing symptoms with Gemini…"
-        )
+        active_icon = "✨" if provider == PROVIDER_GEMINI else "⚡"
+        spinner_msg = f"{active_icon} Analysing with **{provider}**…"
         with st.spinner(spinner_msg):
             try:
-                result = run_triage(api_key_input.strip(), user_prompt, image_bytes, image_mime)
-                result["_location"] = location.strip()   # stash location for display
-                st.session_state.result = result
+                result, provider_used = call_triage(
+                    prompt          = user_prompt,
+                    system_instruction = SYSTEM_INSTRUCTION,
+                    gemini_key      = gemini_key,
+                    groq_key        = groq_key,
+                    provider        = provider,
+                    groq_model      = groq_model,
+                    image_bytes     = image_bytes if provider == PROVIDER_GEMINI else None,
+                    image_mime      = image_mime,
+                    auto_fallback   = auto_fallback,
+                )
+                result["_location"]      = location.strip()
+                result["_provider_used"] = provider_used
+                result["_used_fallback"] = provider_used != provider
+                st.session_state.result  = result
                 label = symptoms[:80] + ("…" if len(symptoms) > 80 else "") if symptoms.strip() else f"[Image: {uploaded_image.name}]"
                 st.session_state.history.append({"symptoms": label, "result": result})
+                if result["_used_fallback"]:
+                    st.warning(
+                        f"⚠️ **{provider}** failed — result was generated by **{provider_used}** (auto-fallback).",
+                        icon="🔄",
+                    )
             except json.JSONDecodeError:
                 st.error("⚠️ The AI returned an unexpected response format. Please try again.")
                 st.stop()
+            except ProviderError as exc:
+                st.error(exc.user_message())
+                st.stop()
             except Exception as exc:
-                st.error(f"❌ Error calling Gemini API: {exc}")
+                st.error(f"❌ Unexpected error: {exc}")
                 st.stop()
 
     # ── Display result ─────────────────────────────────────────────
@@ -464,6 +534,9 @@ if st.session_state.page == "Symptom Checker":
     </h2>
     <p style="color:{meta['color']};margin:0;font-size:1.05rem;">
         {result.get('triage_summary', '')}
+    </p>
+    <p style="color:{meta['color']};margin:6px 0 0 0;font-size:0.78rem;opacity:0.75;">
+        {'✨' if result.get('_provider_used') == PROVIDER_GEMINI else '⚡'} Generated by {result.get('_provider_used', 'AI')}{'&nbsp;·&nbsp;<em>fallback</em>' if result.get('_used_fallback') else ''}
     </p>
 </div>
 """,
@@ -691,8 +764,13 @@ elif st.session_state.page == "Lifestyle Guide":
         )
 
     if guide_submitted:
-        if not api_key_input.strip():
-            st.error("🔑 Please enter your Gemini API key in the sidebar.")
+        active_key = gemini_key if provider == PROVIDER_GEMINI else groq_key
+        if not active_key.strip():
+            other = PROVIDER_GROQ if provider == PROVIDER_GEMINI else PROVIDER_GEMINI
+            st.error(
+                f"🔑 No API key for **{provider}**. "
+                f"Enter it in the ⚙️ AI Settings panel, or switch to **{other}**."
+            )
             st.stop()
         if not guide_topic.strip():
             st.error("📝 Please enter a health topic.")
@@ -700,15 +778,34 @@ elif st.session_state.page == "Lifestyle Guide":
 
         st.session_state["guide_topic_prefill"] = guide_topic
 
-        with st.spinner(f"✍️ Generating guide for **{guide_topic}**…"):
+        active_icon = "✨" if provider == PROVIDER_GEMINI else "⚡"
+        with st.spinner(f"{active_icon} Generating guide with **{provider}**…"):
             try:
-                guide = run_lifestyle_guide(api_key_input.strip(), guide_topic)
+                guide, provider_used = call_lifestyle(
+                    topic              = guide_topic,
+                    system_instruction = LIFESTYLE_SYSTEM,
+                    gemini_key         = gemini_key,
+                    groq_key           = groq_key,
+                    provider           = provider,
+                    groq_model         = groq_model,
+                    auto_fallback      = auto_fallback,
+                )
+                guide["_provider_used"] = provider_used
+                guide["_used_fallback"] = provider_used != provider
                 st.session_state.guide_result = guide
+                if guide["_used_fallback"]:
+                    st.warning(
+                        f"⚠️ **{provider}** failed — guide was generated by **{provider_used}** (auto-fallback).",
+                        icon="🔄",
+                    )
             except json.JSONDecodeError:
                 st.error("⚠️ The AI returned an unexpected format. Please try again.")
                 st.stop()
+            except ProviderError as exc:
+                st.error(exc.user_message())
+                st.stop()
             except Exception as exc:
-                st.error(f"❌ Error calling Gemini API: {exc}")
+                st.error(f"❌ Unexpected error: {exc}")
                 st.stop()
 
     # ── Display guide ──────────────────────────────────────────────
